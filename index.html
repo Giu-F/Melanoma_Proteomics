@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Melanoma Proteomics Landscape - Olsen Lab</title>
+    <title>The proteomics and phosphoproteomics landscape of melanoma under T cell attack</title>
     
     <!-- React & ReactDOM -->
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
@@ -33,6 +33,17 @@
         /* Custom scrollbar for plot container */
         .plot-container::-webkit-scrollbar { height: 8px; }
         .plot-container::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        
+        /* Tab Styles */
+        .tab-active { background-color: #881c1c; color: white; border-color: #881c1c; }
+        .tab-inactive { background-color: white; color: #475569; border-color: #e2e8f0; }
+        .tab-inactive:hover { background-color: #f1f5f9; }
+        
+        /* Stats Badge */
+        .stat-badge { font-size: 0.7rem; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+        .reg-up { background-color: #fee2e2; color: #991b1b; }
+        .reg-down { background-color: #dbeafe; color: #1e40af; }
+        .reg-unchanged { background-color: #f1f5f9; color: #64748b; }
     </style>
 </head>
 <body>
@@ -54,101 +65,162 @@
             return <div ref={plotRef} style={style} />;
         };
 
-        // --- Mock Data (Fallback) ---
-        const DEMO_DATA = `Run\tChannel\tProtein.Group\tProtein.Names\tGenes\tPG.MaxLFQ\tpatient\tgroup
-P24_Co_6h_2\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t21.91761928646909\tP24\tCo-culture
-P605_Co_6h_1\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t22.3870040329087\tP605\tCo-culture
-P905_Co_6h_6\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t21.9881608544067\tP905\tCo-culture
-P905_Co_6h_5\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t21.93034247903132\tP905\tCo-culture
-P905_Co_6h_4\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t21.973619511395892\tP905\tCo-culture
-P905_Co_6h_3\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t22.1120605\tP905\tCo-culture
-P15_Ctrl_6h_4\tH\tQ6P2H8\tTMM53_HUMAN\tTMEM53\t16.61167267892073\tP15\tControl
-P15_Ctrl_6h_1\tH\tQ6P2H8\tTMM53_HUMAN\tTMEM53\t16.40658248342426\tP15\tControl
-P905_Co_6h_2\tH\tQ6P2H8\tTMM53_HUMAN\tTMEM53\t16.82434008623531\tP905\tCo-culture
-P24_Co_6h_5\tM\tQ14353\tGAMT_HUMAN\tGAMT\t19.66714078517552\tP24\tCo-culture
-P905_Ctrl_6h_3\tL\tQ92963\tRIT1_HUMAN\tRIT1\t16.87294263690383\tP905\tControl
-P24_Co_6h_5\tM\tQ92963\tRIT1_HUMAN\tRIT1\t17.705257867230817\tP24\tCo-culture
-P24_Co_6h_4\tM\tQ92963\tRIT1_HUMAN\tRIT1\t17.65\tP24\tCo-culture`;
+        // --- Mock Data (Proteome) ---
+        const DEMO_PROTEOME = `Run\tChannel\tProtein.Group\tProtein.Names\tGenes\tPG.MaxLFQ\tpatient\tgroup
+P24_Co_6h_2\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t21.91\tP24\tCo-culture
+P605_Co_6h_1\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t22.38\tP605\tCo-culture
+P905_Co_6h_6\tL\tP55011\tS12A2_HUMAN\tSLC12A2\t21.98\tP905\tCo-culture
+P15_Ctrl_6h_4\tH\tQ6P2H8\tTMM53_HUMAN\tTMEM53\t16.61\tP15\tControl
+P905_Ctrl_6h_3\tL\tQ92963\tRIT1_HUMAN\tRIT1\t16.87\tP905\tControl`;
+
+        // --- Mock Data (Phospho) ---
+        const DEMO_PHOSPHO = `psite.id\tChannel\tGenes\tgene_site\tvariable\tvalue\tpatient\tgroup
+Q8IYB3:S781_M3\tH\tSRRM1\tSRRM1_S781_M3\tP605_Co_2h_1\t18.17\tP605\tCo-culture
+P35658:S678_M3\tH\tNUP214\tNUP214_S678_M3\tP605_Co_2h_1\t17.80\tP605\tCo-culture
+Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP905_Co_2h_1\t20.5\tP905\tCo-culture
+Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP15_Ctrl_2h_1\t19.2\tP15\tControl`;
+
+        // --- Empty Limma fallback to avoid confusion ---
+        const DEMO_LIMMA_PROT = ``;
 
         const App = () => {
-            const [data, setData] = useState([]);
-            const [searchTerm, setSearchTerm] = useState('SLC12A2');
+            // Data States
+            const [proteomeData, setProteomeData] = useState([]);
+            const [phosphoData, setPhosphoData] = useState([]);
+            const [limmaProt, setLimmaProt] = useState([]);
+            const [limmaPhos, setLimmaPhos] = useState([]);
+            const [activeTab, setActiveTab] = useState('proteome'); // 'proteome' | 'phospho'
+            
+            // UI States
+            const [searchTerm, setSearchTerm] = useState('SLC12A2'); // Default search
+            const [debouncedSearch, setDebouncedSearch] = useState('SLC12A2'); 
             const [loading, setLoading] = useState(false);
             const [loadError, setLoadError] = useState(null);
-            const [filteredData, setFilteredData] = useState([]);
             const [logoSrc, setLogoSrc] = useState('JVOlogo_large.png');
 
+            // --- Initial Load ---
             useEffect(() => {
                 setLoading(true);
-                
-                // --- Protocol Check for User Friendliness ---
                 if (window.location.protocol === 'file:') {
                     setLoadError({
                         type: 'protocol',
-                        message: "Browser Security Block: Automatic loading is disabled when opening HTML files directly from disk (file://)."
+                        message: "Browser Security: Automatic loading disabled on file:// protocol. Please upload files manually."
                     });
                 }
 
-                const loadData = async () => {
+                // Helper to find valid file in zip (ignoring __MACOSX)
+                const findValidFile = (zip, preferredExt = ['.txt', '.tsv', '.csv']) => {
+                    const filenames = Object.keys(zip.files);
+                    // Try to find exact match if specific name is implied, or generic
+                    return filenames.find(name => 
+                        !name.startsWith('__MACOSX') && 
+                        !name.startsWith('.') && 
+                        !zip.files[name].dir &&
+                        preferredExt.some(ext => name.endsWith(ext))
+                    ) || filenames[0];
+                };
+
+                // Helper to fetch and parse
+                const fetchData = async (url, type) => {
                     try {
-                        // 1. Try fetching the ZIP file first (Preferred for GitHub/Web)
-                        // It's much smaller (10MB vs 100MB) so it loads faster.
-                        const zipResponse = await fetch('PG.MaxLFQ_long_6h_log2_groups.zip');
-                        if (zipResponse.ok) {
-                            const blob = await zipResponse.blob();
+                        // Try ZIP first
+                        const zipUrl = url.replace('.tsv', '.zip').replace('.txt', '.zip');
+                        const zipRes = await fetch(zipUrl);
+                        if (zipRes.ok) {
+                            const blob = await zipRes.blob();
                             const zip = await JSZip.loadAsync(blob);
-                            // We assume the zip contains the TSV. We grab the first file found.
-                            const filename = Object.keys(zip.files)[0];
+                            const filename = findValidFile(zip);
                             if (filename) {
                                 const text = await zip.file(filename).async("string");
-                                parseTSV(text);
-                                setLoadError(null);
-                                return;
+                                return parseData(text, type, true); // Return parsed data directly
                             }
                         }
 
-                        // 2. Fallback: Try fetching the raw TSV file
-                        const tsvResponse = await fetch('PG.MaxLFQ_long_6h_log2_groups.tsv');
-                        if (tsvResponse.ok) {
-                            const text = await tsvResponse.text();
-                            parseTSV(text);
-                            setLoadError(null);
-                            return;
+                        // Try raw text
+                        const res = await fetch(url);
+                        if (res.ok) {
+                            const text = await res.text();
+                            return parseData(text, type, true);
                         }
-
-                        throw new Error("Integrated file not found (checked .zip and .tsv)");
-
-                    } catch (err) {
-                        console.warn("Auto-load failed.", err);
-                        // Only set error if we haven't already set a protocol error
-                        setLoadError(prev => prev || {
-                            type: 'fetch',
-                            message: "Could not auto-load dataset. Ensure 'PG.MaxLFQ_long_6h_log2_groups.zip' (or .tsv) is in the same folder."
-                        });
-                        parseTSV(DEMO_DATA);
+                    } catch (e) {
+                        console.warn(`Failed to load ${url}`, e);
                     }
+                    return null;
                 };
 
-                loadData();
+                Promise.all([
+                    fetchData('PG.MaxLFQ_long_6h_log2_groups.tsv', 'proteome'),
+                    fetchData('phosphosite_matrix_2h_long.txt', 'phospho'),
+                    fetchData('limma_proteome_6h.txt', 'limma_prot'),
+                    fetchData('limma_phos_silac_2h.txt', 'limma_phos')
+                ]).then(([prot, phos, lProt, lPhos]) => {
+                    if (prot) setProteomeData(prot); else parseData(DEMO_PROTEOME, 'proteome');
+                    if (phos) setPhosphoData(phos); else parseData(DEMO_PHOSPHO, 'phospho');
+                    if (lProt) setLimmaProt(lProt); 
+                    if (lPhos) setLimmaPhos(lPhos); 
+
+                    if (prot || phos) setLoadError(null);
+                    setLoading(false);
+                });
 
                 if (window.lucide) window.lucide.createIcons();
             }, []);
 
-            const parseTSV = (content) => {
-                Papa.parse(content, {
-                    header: true,
-                    delimiter: "\t",
-                    skipEmptyLines: true,
-                    complete: (results) => {
-                        const cleanData = results.data.map(d => ({
-                            ...d,
-                            'PG.MaxLFQ': parseFloat(d['PG.MaxLFQ']),
-                            'Label': `${d.patient} - ${d.Channel}` 
-                        })).filter(d => !isNaN(d['PG.MaxLFQ']));
-                        
-                        setData(cleanData);
-                        setLoading(false);
-                    }
+            // --- Parsing Logic with Auto-Detection ---
+            const parseData = (content, typeOverride = null, returnData = false) => {
+                if (!content || content.trim() === "") return [];
+
+                // Peek at header to detect type if not forced
+                const firstLine = content.slice(0, 500);
+                
+                let type = typeOverride;
+                if (!type) {
+                    if (firstLine.includes('adj.P.Val') && firstLine.includes('Protein.Group')) type = 'limma_prot';
+                    else if (firstLine.includes('adj.P.Val') && (firstLine.includes('psite.id') || firstLine.includes('gene_site'))) type = 'limma_phos';
+                    else if (firstLine.includes('gene_site') || firstLine.includes('psite.id')) type = 'phospho';
+                    else type = 'proteome';
+                }
+
+                return new Promise((resolve) => {
+                    Papa.parse(content, {
+                        header: true,
+                        delimiter: "\t",
+                        skipEmptyLines: true,
+                        complete: (results) => {
+                            const data = results.data;
+                            
+                            // Process Main Data vs Limma Data
+                            if (type === 'proteome' || type === 'phospho') {
+                                const validData = data.map(d => {
+                                    const val = parseFloat(d['PG.MaxLFQ'] || d['value']);
+                                    if (isNaN(val)) return null;
+                                    return { ...d, _value: val };
+                                }).filter(Boolean);
+                                
+                                if (!returnData) {
+                                    if (type === 'phospho') { setPhosphoData(validData); if(validData.length>100) setActiveTab('phospho'); }
+                                    else { setProteomeData(validData); if(validData.length>100) setActiveTab('proteome'); }
+                                    setLoading(false);
+                                }
+                                resolve(validData);
+                            } else {
+                                // Limma Data Processing
+                                const cleanLimma = data.map(d => ({
+                                    ...d,
+                                    logFC: parseFloat(d.logFC),
+                                    P_Value: parseFloat(d['P.Value']),
+                                    adj_P_Val: parseFloat(d['adj.P.Val'])
+                                })).filter(d => !isNaN(d.logFC)); // Ensure valid numbers
+
+                                if (!returnData) {
+                                    if (type === 'limma_phos') setLimmaPhos(cleanLimma);
+                                    else setLimmaProt(cleanLimma);
+                                    setLoading(false);
+                                }
+                                resolve(cleanLimma);
+                            }
+                        }
+                    });
                 });
             };
 
@@ -159,275 +231,243 @@ P24_Co_6h_4\tM\tQ92963\tRIT1_HUMAN\tRIT1\t17.65\tP24\tCo-culture`;
                 setLoadError(null);
                 
                 const reader = new FileReader();
+                // This wrapper ensures we detect the file type automatically
+                const processFile = (text) => parseData(text); 
+
                 reader.onload = async (e) => {
-                    // Check if uploaded file is a ZIP by extension or "magic bytes" (simple check here)
                     if (file.name.endsWith('.zip')) {
                          try {
                             const zip = await JSZip.loadAsync(e.target.result);
-                            const filename = Object.keys(zip.files)[0];
-                            const text = await zip.file(filename).async("string");
-                            parseTSV(text);
-                        } catch (err) {
-                            alert("Failed to unzip file. Please ensure it's a valid zip archive.");
-                            setLoading(false);
+                            // Find ANY text/tsv file inside (skipping hidden Mac folders)
+                            const filename = Object.keys(zip.files).find(n => !n.startsWith('__') && !n.startsWith('.') && !zip.files[n].dir && (n.endsWith('.txt')||n.endsWith('.tsv')||n.endsWith('.csv')));
+                            if (filename) {
+                                const text = await zip.file(filename).async("string");
+                                processFile(text);
+                            } else { 
+                                alert("No valid text/tsv file found inside the zip archive."); 
+                                setLoading(false); 
+                            }
+                        } catch (err) { 
+                            console.error(err);
+                            alert("Failed to unzip. Please ensure it is a valid .zip file."); 
+                            setLoading(false); 
                         }
                     } else {
-                        // Assume text/tsv
-                        parseTSV(e.target.result);
+                        processFile(e.target.result);
                     }
                 };
                 
-                if (file.name.endsWith('.zip')) {
-                    reader.readAsArrayBuffer(file);
-                } else {
-                    reader.readAsText(file);
-                }
+                if (file.name.endsWith('.zip')) reader.readAsArrayBuffer(file);
+                else reader.readAsText(file);
             };
 
-             const handleLogoUpload = (event) => {
-                const file = event.target.files[0];
+            const handleLogoUpload = (e) => {
+                const file = e.target.files[0];
                 if (file) {
                     const reader = new FileReader();
-                    reader.onload = (e) => setLogoSrc(e.target.result);
+                    reader.onload = (ev) => setLogoSrc(ev.target.result);
                     reader.readAsDataURL(file);
                 }
             };
 
-            // --- Optimized Search Logic (Debounced) ---
+            // --- Search Debounce ---
             useEffect(() => {
-                // Creates a timeout to delay the filter logic
                 const timer = setTimeout(() => {
-                    if (!searchTerm || data.length === 0) {
-                        setFilteredData([]);
-                        return;
-                    }
-                    const term = searchTerm.toLowerCase();
-                    const filtered = data.filter(row => {
-                        const gene = (row.Genes || "").toLowerCase();
-                        const protein = (row['Protein.Group'] || "").toLowerCase();
-                        return gene.includes(term) || protein.includes(term);
-                    });
-                    setFilteredData(filtered);
-                }, 300); // 300ms delay: wait for user to stop typing
-
-                // Cleanup: clear timeout if user types again before 300ms
+                    setDebouncedSearch(searchTerm); 
+                }, 300);
                 return () => clearTimeout(timer);
-            }, [searchTerm, data]);
+            }, [searchTerm]);
 
-            // --- Advanced Plotting Logic with Facets & Patterns ---
-            const { plotData, plotLayout } = useMemo(() => {
-                if (filteredData.length === 0) return { plotData: [], plotLayout: {} };
+            // --- Plot Data Generation (Multi-Plot Support) ---
+            const plots = useMemo(() => {
+                const currentData = activeTab === 'proteome' ? proteomeData : phosphoData;
+                const currentLimma = activeTab === 'proteome' ? limmaProt : limmaPhos;
+                
+                if (currentData.length === 0) return [];
 
-                const patients = [...new Set(filteredData.map(d => d.patient))].sort();
-                const groups = ["Control", "Co-culture"]; 
-                const channels = [...new Set(filteredData.map(d => d.Channel))].sort(); 
+                const term = debouncedSearch.toLowerCase().trim();
                 
-                // Colors - Base RGB values for transparency handling
-                const baseColors = { 
-                    "Control": { r: 0, g: 0, b: 139, hex: '#00008B' }, 
-                    "Co-culture": { r: 139, g: 0, b: 0, hex: '#8B0000' } 
-                };
-                
-                // Define Transparency Levels (Opacities) instead of patterns
-                // 1.0 = Solid, lower = more transparent
-                const opacities = [1, 0.6, 0.8, 0.4, 0.9, 0.5, 0.7]; 
-                const patientOpacities = {};
-                patients.forEach((p, i) => {
-                    patientOpacities[p] = opacities[i % opacities.length];
+                // 1. Filter Data
+                const filtered = currentData.filter(row => {
+                    const gene = (row.Genes || "").toLowerCase();
+                    const id = (activeTab === 'proteome' ? row['Protein.Group'] : row['gene_site'] || row['psite.id']) || "";
+                    return gene.includes(term) || id.toLowerCase().includes(term);
                 });
 
-                const traces = [];
-                const annotations = [];
+                if (filtered.length === 0) return [];
 
-                // Constants for numeric positioning & layout
-                const barWidth = 0.35;
-                const groupOffset = 0.2; // Distance from center
-                const gap = 0.05; // Gap between subplots
-                
-                // SAFETY CHECK: Prevent division by zero if no channels found
-                if (channels.length === 0) return { plotData: [], plotLayout: {} };
+                // 2. Identify Unique Entities
+                let uniqueEntities = [];
+                if (activeTab === 'proteome') {
+                    const groups = [...new Set(filtered.map(d => d['Protein.Group']))];
+                    uniqueEntities = groups.slice(0, 5).map(id => ({
+                        id: id,
+                        title: filtered.find(d => d['Protein.Group'] === id)?.Genes || id,
+                        data: filtered.filter(d => d['Protein.Group'] === id)
+                    }));
+                } else {
+                    const sites = [...new Set(filtered.map(d => d['gene_site']))];
+                    uniqueEntities = sites.slice(0, 10).map(siteId => ({
+                        id: siteId,
+                        title: siteId, 
+                        data: filtered.filter(d => d['gene_site'] === siteId)
+                    }));
+                }
 
-                const subplotWidth = (1 - (gap * (channels.length - 1))) / channels.length;
-
-                // 1. Iterate Channels to create Subplots
-                channels.forEach((channel, idx) => {
-                    const xaxisName = idx === 0 ? 'x' : `x${idx + 1}`;
-                    const yaxisName = 'y'; 
+                // 3. Generate Plot Config
+                return uniqueEntities.map(entity => {
+                    const entityData = entity.data;
+                    const patients = [...new Set(entityData.map(d => d.patient))].sort();
+                    const groups = ["Control", "Co-culture"]; 
+                    const channels = [...new Set(entityData.map(d => d.Channel))].sort(); 
                     
-                    // Calculate precise center of the subplot domain for the title
-                    const startDomain = idx * (subplotWidth + gap);
-                    const centerDomain = startDomain + (subplotWidth / 2);
+                    const baseColors = { "Control": {r:0,g:0,b:139,hex:'#00008B'}, "Co-culture": {r:139,g:0,b:0,hex:'#8B0000'} };
+                    const opacities = [1, 0.6, 0.8, 0.4, 0.9, 0.5, 0.7]; 
+                    const patientOpacities = {};
+                    patients.forEach((p, i) => patientOpacities[p] = opacities[i % opacities.length]);
 
-                    // Add Subplot Title Annotation
-                    annotations.push({
-                        text: `Channel: ${channel}`,
-                        x: centerDomain, // Use calculated center
-                        y: 1.05,
-                        xref: 'paper',
-                        yref: 'paper',
-                        showarrow: false,
-                        xanchor: 'center', // Ensure text center aligns with point
-                        font: { size: 16, color: '#1e293b', weight: 'bold' }
-                    });
+                    const traces = [];
+                    const annotations = [];
+                    
+                    if (channels.length === 0) return null;
 
-                    // 2. Iterate Groups
-                    groups.forEach((groupName, gIdx) => {
-                        const base = baseColors[groupName];
-                        const groupHex = base.hex;
+                    const gap = 0.05;
+                    const subplotWidth = (1 - (gap * (channels.length - 1))) / channels.length;
+                    const barWidth = 0.35;
+                    const groupOffset = 0.2;
+
+                    channels.forEach((channel, idx) => {
+                        const xaxisName = idx === 0 ? 'x' : `x${idx + 1}`;
+                        const yaxisName = 'y'; 
                         
-                        // Calculate offset: Control (left), Co-culture (right)
-                        const currentOffset = groupName === 'Control' ? -groupOffset : groupOffset;
-
-                        // Aggregates
-                        const xBar = [];
-                        const yBar = [];
-                        const fillColors = [];
+                        const centerDomain = (idx * (subplotWidth + gap)) + (subplotWidth / 2);
                         
-                        // Scatter points
-                        const scatterX = [];
-                        const scatterY = [];
-                        const scatterText = [];
+                        // --- Find Limma Stats for this Entity + Channel ---
+                        let stats = null;
+                        if (currentLimma.length > 0) {
+                            if (activeTab === 'proteome') {
+                                stats = currentLimma.find(l => 
+                                    l['Protein.Group'] === entity.id && 
+                                    (l.Channel === channel || l.Channel === `"${channel}"`) // Handle potential quotes in CSV
+                                );
+                            } else {
+                                // For Phospho, Limma might use psite.id or gene_site.
+                                stats = currentLimma.find(l => 
+                                    (l['gene_site'] === entity.id || l['psite.id'] === entity.id) &&
+                                    (l.Channel === channel || l.Channel === `"${channel}"`)
+                                );
+                            }
+                        }
 
-                        patients.forEach((patient, pIdx) => {
-                            const points = filteredData.filter(d => 
-                                d.Channel === channel && 
-                                d.group === groupName && 
-                                d.patient === patient
-                            );
+                        // Format Stats Text
+                        let statsText = "Filtered";
+                        let statsColor = "#64748b"; // Slate-500
+                        if (stats) {
+                            const reg = (stats.Regulation || "Unchanged").replace(/"/g, ''); // Remove quotes
+                            const logFC = stats.logFC.toFixed(2);
+                            const adjP = stats.adj_P_Val.toExponential(1);
+                            statsText = `logFC: ${logFC} | adj.P: ${adjP} | ${reg}`;
+                            
+                            if (reg === 'Up') statsColor = '#991b1b'; // Red
+                            else if (reg === 'Down') statsColor = '#1e40af'; // Blue
+                        }
 
-                            if (points.length > 0) {
-                                // Numeric X position for this patient + group offset
-                                const numericX = pIdx + currentOffset;
+                        // Add Subplot Title + Stats Annotation
+                        annotations.push({
+                            text: `<b>Channel: ${channel}</b><br><span style="color:${statsColor}; font-size: 10px;">${statsText}</span>`, 
+                            x: centerDomain, y: 1.12, // Moved up slightly to fit 2 lines
+                            xref: 'paper', yref: 'paper', showarrow: false, xanchor: 'center',
+                            font: { size: 14, color: '#334155' }
+                        });
 
-                                // Mean for Bar
-                                const values = points.map(p => p['PG.MaxLFQ']);
-                                const sum = values.reduce((a, b) => a + b, 0);
-                                const mean = sum / values.length;
+                        groups.forEach(groupName => {
+                            const base = baseColors[groupName];
+                            const currentOffset = groupName === 'Control' ? -groupOffset : groupOffset;
+                            const xBar = [], yBar = [], fillColors = [], scatterX = [], scatterY = [], scatterText = [];
 
-                                xBar.push(numericX);
-                                yBar.push(mean);
-                                
-                                // Generate RGBA color for this bar based on patient opacity
-                                const alpha = patientOpacities[patient] || 1;
-                                fillColors.push(`rgba(${base.r}, ${base.g}, ${base.b}, ${alpha})`);
+                            patients.forEach((patient, pIdx) => {
+                                const points = entityData.filter(d => d.Channel === channel && d.group === groupName && d.patient === patient);
+                                if (points.length > 0) {
+                                    const numericX = pIdx + currentOffset;
+                                    const vals = points.map(p => p._value);
+                                    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
 
-                                // Scatter points with manual jitter
-                                values.forEach((v, i) => {
-                                    // Add small random jitter to X to prevent perfect overlap
-                                    const jitter = (Math.random() - 0.5) * 0.1;
-                                    scatterX.push(numericX + jitter);
-                                    scatterY.push(v);
-                                    scatterText.push(`Patient: ${patient}<br>ID: ${points[i]['Protein.Group']}<br>Val: ${v.toFixed(2)}`);
+                                    xBar.push(numericX);
+                                    yBar.push(mean);
+                                    const alpha = patientOpacities[patient] || 1;
+                                    fillColors.push(`rgba(${base.r}, ${base.g}, ${base.b}, ${alpha})`);
+
+                                    vals.forEach((v, i) => {
+                                        const jitter = (Math.random() - 0.5) * 0.1;
+                                        scatterX.push(numericX + jitter);
+                                        scatterY.push(v);
+                                        const id = activeTab === 'proteome' ? points[i]['Protein.Group'] : points[i]['gene_site'];
+                                        scatterText.push(`Pt: ${patient}<br>ID: ${id}<br>Val: ${v.toFixed(2)}`);
+                                    });
+                                }
+                            });
+
+                            if (xBar.length > 0) {
+                                traces.push({
+                                    x: xBar, y: yBar, name: groupName, type: 'bar',
+                                    xaxis: xaxisName, yaxis: yaxisName, width: barWidth,
+                                    marker: { color: fillColors, line: { color: base.hex, width: 2 } },
+                                    showlegend: idx === 0, legendgroup: groupName
+                                });
+                                traces.push({
+                                    x: scatterX, y: scatterY, text: scatterText, name: groupName, type: 'scatter',
+                                    mode: 'markers', xaxis: xaxisName, yaxis: yaxisName,
+                                    marker: { color: '#000000', size: 5, opacity: 0.7 },
+                                    showlegend: false, hoverinfo: 'y+text'
                                 });
                             }
                         });
-
-                        if (xBar.length > 0) {
-                            // -- Bar Trace --
-                            traces.push({
-                                x: xBar,
-                                y: yBar,
-                                name: groupName,
-                                type: 'bar',
-                                xaxis: xaxisName,
-                                yaxis: yaxisName,
-                                width: barWidth, // Manually set width
-                                marker: {
-                                    color: fillColors, // Individual bar colors with transparency
-                                    line: { color: groupHex, width: 2 } // Keep border solid and consistent
-                                },
-                                showlegend: idx === 0, 
-                                legendgroup: groupName
-                            });
-
-                            // -- Scatter Trace --
-                            traces.push({
-                                x: scatterX,
-                                y: scatterY,
-                                text: scatterText,
-                                name: `${groupName} (Points)`,
-                                type: 'scatter',
-                                mode: 'markers',
-                                xaxis: xaxisName,
-                                yaxis: yaxisName,
-                                marker: {
-                                    color: '#000000', 
-                                    size: 5,
-                                    symbol: 'circle',
-                                    opacity: 0.7
-                                },
-                                showlegend: false,
-                                hoverinfo: 'y+text',
-                            });
-                        }
                     });
-                });
 
-                // Calculate Grid Layout Domains
-                // Calculate Min/Max for dynamic Y-axis scaling
-                // FIX: Use manual loop or reduce to avoid Stack Overflow with Math.min(...largeArray)
-                let minVal = Infinity;
-                let maxVal = -Infinity;
-                
-                // Efficiently find min/max
-                for (let i = 0; i < filteredData.length; i++) {
-                    const val = filteredData[i]['PG.MaxLFQ'];
-                    if (val < minVal) minVal = val;
-                    if (val > maxVal) maxVal = val;
-                }
-                
-                // Fallback if no valid range
-                if (minVal === Infinity) { minVal = 0; maxVal = 10; }
+                    // Dynamic Y Range
+                    let minVal = Infinity, maxVal = -Infinity;
+                    entityData.forEach(d => { if(d._value < minVal) minVal = d._value; if(d._value > maxVal) maxVal = d._value; });
+                    if (minVal === Infinity) { minVal=0; maxVal=10; }
+                    const rangeSpan = maxVal - minVal;
+                    const padding = rangeSpan > 0 ? rangeSpan * 0.2 : 0.5;
 
-                // Add padding (e.g. 20% of the range) to ensure dots aren't on the edge
-                const rangeSpan = maxVal - minVal;
-                const padding = rangeSpan > 0 ? rangeSpan * 0.2 : 0.5;
-
-                const layoutUpdates = {
-                    grid: {
-                        rows: 1,
-                        columns: channels.length,
-                        pattern: 'independent'
-                    },
-                    annotations: annotations,
-                    barmode: 'overlay', // We are manually positioning bars, so 'overlay' allows us to control x coordinates freely
-                    yaxis: { 
-                        title: { text: 'PG.MaxLFQ (Log2)', font: { size: 14, color: '#334155' } },
-                        gridcolor: '#e2e8f0',
-                        zerolinecolor: '#e2e8f0',
-                        // Dynamic range to focus on data differences (zooming in)
-                        range: [minVal - padding, maxVal + padding]
-                    }
-                };
-                
-                channels.forEach((_, i) => {
-                    const start = i * (subplotWidth + gap);
-                    const end = start + subplotWidth;
-                    const key = i === 0 ? 'xaxis' : `xaxis${i + 1}`;
-                    
-                    layoutUpdates[key] = {
-                        domain: [start, end],
-                        anchor: 'y',
-                        title: { text: 'Patient ID', font: { size: 12 } },
-                        // Switch to linear/numeric axis but label with ticks
-                        tickvals: patients.map((_, i) => i),
-                        ticktext: patients,
-                        tickmode: 'array',
-                        range: [-0.6, patients.length - 0.4] // Add padding
+                    const layoutUpdates = {
+                        grid: { rows: 1, columns: channels.length, pattern: 'independent' },
+                        annotations: annotations,
+                        barmode: 'overlay',
+                        yaxis: { 
+                            title: { text: 'Log2 Intensity', font: { size: 14, color: '#334155' } },
+                            gridcolor: '#e2e8f0', range: [minVal - padding, maxVal + padding]
+                        },
+                        height: 450, // Height per plot
+                        margin: { l: 60, r: 20, t: 80, b: 60 }, // Increased top margin for stats
+                        showlegend: true,
+                        legend: { orientation: 'h', y: 1.25, x: 0.5, xanchor: 'center' }
                     };
-                });
 
-                return { plotData: traces, plotLayout: layoutUpdates };
-            }, [filteredData]);
+                    channels.forEach((_, i) => {
+                        const start = i * (subplotWidth + gap);
+                        const end = start + subplotWidth;
+                        const key = i === 0 ? 'xaxis' : `xaxis${i + 1}`;
+                        layoutUpdates[key] = {
+                            domain: [start, end], anchor: 'y',
+                            title: { text: 'Patient ID', font: { size: 12 } },
+                            tickvals: patients.map((_, i) => i), ticktext: patients, tickmode: 'array',
+                            range: [-0.6, patients.length - 0.4]
+                        };
+                    });
 
-            // Safe Title Construction (avoid massive strings)
-            const uniqueGenesTitle = useMemo(() => {
-                const uniqueGenesList = [...new Set(filteredData.map(d => d.Genes))];
-                if (uniqueGenesList.length > 5) {
-                    return `${uniqueGenesList.slice(0, 5).join(", ")} + ${uniqueGenesList.length - 5} more...`;
-                }
-                return uniqueGenesList.join(", ");
-            }, [filteredData]);
+                    return { id: entity.id, title: entity.title, data: traces, layout: layoutUpdates };
+                }).filter(Boolean);
+
+            }, [debouncedSearch, proteomeData, phosphoData, limmaProt, limmaPhos, activeTab]);
+
+            // Helper to get suggested genes for empty results
+            const suggestedGenes = useMemo(() => {
+                if (plots.length > 0) return [];
+                const currentData = activeTab === 'proteome' ? proteomeData : phosphoData;
+                return [...new Set(currentData.map(d => d.Genes))].slice(0, 3).join(", ");
+            }, [plots, activeTab, proteomeData, phosphoData]);
 
             return (
                 <div className="min-h-screen bg-slate-50 text-slate-900 font-sans">
@@ -435,36 +475,18 @@ P24_Co_6h_4\tM\tQ92963\tRIT1_HUMAN\tRIT1\t17.65\tP24\tCo-culture`;
                         <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8">
                             <div className="flex flex-col md:flex-row items-center justify-between gap-6">
                                 <div className="flex items-center gap-6">
-                                    <div className="relative group cursor-pointer" title="Click to upload custom logo">
-                                        <img 
-                                            src={logoSrc} 
-                                            alt="Lab Logo" 
-                                            className="h-24 w-auto object-contain"
-                                            onError={(e) => {
-                                                e.target.style.display='none';
-                                                document.getElementById('logo-placeholder').style.display='flex';
-                                            }}
-                                        />
-                                        <div id="logo-placeholder" className="hidden h-24 w-24 bg-slate-200 flex items-center justify-center rounded text-slate-400 text-xs text-center p-2">
-                                            Logo Not Found
-                                        </div>
-                                        <input 
-                                            type="file" 
-                                            accept="image/*"
-                                            onChange={handleLogoUpload}
-                                            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                        />
+                                    <div className="relative group cursor-pointer">
+                                        <img src={logoSrc} className="h-24 w-auto object-contain" 
+                                            onError={(e) => { e.target.style.display='none'; document.getElementById('logo-ph').style.display='flex'; }} />
+                                        <div id="logo-ph" className="hidden h-24 w-24 bg-slate-200 flex items-center justify-center rounded text-slate-400 text-xs text-center p-2">Logo</div>
+                                        <input type="file" accept="image/*" onChange={handleLogoUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                                     </div>
                                     <div className="text-center md:text-left">
-                                        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                                            The proteomics and phosphoproteomics landscape of melanoma under T cell attack
-                                        </h1>
+                                        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">The proteomics and phosphoproteomics landscape of melanoma under T cell attack</h1>
                                         <div className="mt-2 text-sm text-slate-600 space-y-0.5">
                                             <p className="font-semibold text-slate-800">Jesper V. Olsen Lab</p>
-                                            <p>Novo Nordisk Foundation Center for Protein Research</p>
-                                            <p>Department of Cellular and Molecular Medicine (ICMM)</p>
-                                            <p>Faculty of Health and Medical Sciences (SUND), University of Copenhagen (KU)</p>
-                                            <p className="pt-2 text-slate-500 font-medium">Developed by Giulia Franciosa, PhD</p>
+                                            <p>Novo Nordisk Foundation Center for Protein Research (CPR)</p>
+                                            <p>Developed by Giulia Franciosa, PhD</p>
                                         </div>
                                     </div>
                                 </div>
@@ -473,41 +495,39 @@ P24_Co_6h_4\tM\tQ92963\tRIT1_HUMAN\tRIT1\t17.65\tP24\tCo-culture`;
                     </header>
 
                     <main className="max-w-7xl mx-auto px-4 py-8 sm:px-6 lg:px-8">
-                        {/* Status Message for Data Loading */}
+                        
+                        {/* Status Message */}
                         {loadError && (
-                            <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mb-6 mx-auto max-w-7xl shadow-sm rounded-r">
-                                <div className="flex">
-                                    <div className="flex-shrink-0">
-                                        <i data-lucide="alert-circle" className="h-5 w-5 text-amber-400"></i>
-                                    </div>
-                                    <div className="ml-3">
-                                        <p className="font-medium text-amber-800">
-                                            {loadError.type === 'protocol' ? "Automatic Data Loading Paused" : "Data Loading Error"}
-                                        </p>
-                                        <p className="text-sm text-amber-700 mt-1">
-                                            {loadError.message}
-                                        </p>
-                                        {loadError.type === 'protocol' && (
-                                            <div className="mt-3 text-xs text-amber-800 bg-amber-100 p-2 rounded">
-                                                <strong>How to fix:</strong> This webpage works best when hosted on a server.
-                                                <ul className="list-disc ml-4 mt-1 space-y-1">
-                                                    <li><strong>Easy:</strong> Use the "Upload Dataset" button below to manually load the file for now.</li>
-                                                    <li><strong>For Deployment:</strong> Upload these files to a web server (like GitHub Pages).</li>
-                                                    <li><strong>For Local Use:</strong> In this folder, run python <code>-m http.server 8000</code> and open <code>localhost:8000</code>.</li>
-                                                </ul>
-                                            </div>
-                                        )}
-                                    </div>
+                            <div className="bg-amber-50 border-l-4 border-amber-400 p-4 mb-6 shadow-sm">
+                                <div className="flex items-center text-amber-800">
+                                    <i data-lucide="alert-circle" className="h-5 w-5 mr-3"></i>
+                                    <span className="text-sm">{loadError.message}</span>
                                 </div>
                             </div>
                         )}
 
+                        {/* Controls */}
                         <div className="bg-white rounded-xl shadow-sm p-6 mb-8 border border-slate-200">
+                            
+                            {/* Tab Switcher */}
+                            <div className="flex justify-center mb-8">
+                                <div className="flex rounded-lg bg-slate-100 p-1">
+                                    <button 
+                                        onClick={() => setActiveTab('proteome')}
+                                        className={`px-6 py-2.5 rounded-md text-sm font-medium transition-all ${activeTab === 'proteome' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                        Proteome (6h)
+                                    </button>
+                                    <button 
+                                        onClick={() => setActiveTab('phospho')}
+                                        className={`px-6 py-2.5 rounded-md text-sm font-medium transition-all ${activeTab === 'phospho' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                                        Phospho (2h)
+                                    </button>
+                                </div>
+                            </div>
+
                             <div className="flex flex-col md:flex-row gap-6 items-end">
                                 <div className="w-full md:w-1/2">
-                                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                                        Search Protein or Gene
-                                    </label>
+                                    <label className="block text-sm font-medium text-slate-700 mb-2">Search Gene or ID</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                             <i data-lucide="search" className="h-5 w-5 text-slate-400"></i>
@@ -515,84 +535,63 @@ P24_Co_6h_4\tM\tQ92963\tRIT1_HUMAN\tRIT1\t17.65\tP24\tCo-culture`;
                                         <input
                                             type="text"
                                             className="block w-full pl-10 pr-3 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-900 focus:border-red-900 transition-colors"
-                                            placeholder="e.g. SLC12A2, P55011"
+                                            placeholder={activeTab === 'proteome' ? "e.g. SLC12A2, P55011" : "e.g. RIT1, RIT1_S141"}
                                             value={searchTerm}
                                             onChange={(e) => setSearchTerm(e.target.value)}
                                         />
                                     </div>
                                 </div>
 
-                                <div className="w-full md:w-auto">
-                                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                                        Data Source (Integrated)
-                                    </label>
-                                    <label className={`flex items-center justify-center px-4 py-3 border rounded-lg shadow-sm text-sm font-medium cursor-pointer transition-colors ${loadError ? 'bg-amber-50 border-amber-300 text-amber-700 hover:bg-amber-100' : 'bg-slate-50 border-slate-300 text-slate-600'}`}>
-                                        <i data-lucide={loadError ? "upload" : "check"} className="h-4 w-4 mr-2"></i>
-                                        {loading ? 'Parsing...' : (loadError ? 'Upload TSV or ZIP' : 'TSV / ZIP Loaded')}
+                                <div className="w-full md:w-auto relative">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <label className="block text-sm font-medium text-slate-700">Upload Dataset</label>
+                                    </div>
+                                    
+                                    <label className={`flex items-center justify-center px-4 py-3 border rounded-lg shadow-sm text-sm font-medium cursor-pointer transition-colors bg-slate-50 border-slate-300 hover:bg-slate-100 text-slate-600`}>
+                                        <i data-lucide="upload" className="h-4 w-4 mr-2"></i>
+                                        {loading ? 'Parsing...' : 'Upload File (Auto-Detect)'}
                                         <input type="file" accept=".tsv,.txt,.csv,.zip" onChange={handleFileUpload} className="hidden" />
                                     </label>
                                 </div>
-                                <div className="text-sm text-slate-500 pb-3">
-                                    Total Rows: {data.length.toLocaleString()}
+                                <div className="text-sm text-slate-500 pb-3 text-right">
+                                    <div>{activeTab === 'proteome' ? proteomeData.length.toLocaleString() : phosphoData.length.toLocaleString()} Data Rows</div>
+                                    <div className="text-xs text-slate-400 mt-1">
+                                        Limma Loaded: Prot ({limmaProt.length}), Phos ({limmaPhos.length})
+                                    </div>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
-                            <div className="p-4 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
-                                <h2 className="font-semibold text-slate-800">
-                                    Expression Levels: {uniqueGenesTitle || searchTerm}
-                                </h2>
-                            </div>
-                            
-                            <div className="p-4 w-full h-[600px] flex items-center justify-center">
-                                {filteredData.length > 0 ? (
-                                    <Plot
-                                        data={plotData}
-                                        layout={{
-                                            autosize: true,
-                                            title: false,
-                                            ...plotLayout,
-                                            paper_bgcolor: 'white',
-                                            plot_bgcolor: 'white',
-                                            showlegend: true,
-                                            legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
-                                            margin: { l: 60, r: 20, t: 80, b: 60 },
-                                            font: { family: 'Inter, sans-serif' },
-                                            hovermode: 'closest'
-                                        }}
-                                        style={{ width: '100%', height: '100%' }}
-                                        config={{ responsive: true, displayModeBar: true }}
-                                    />
-                                ) : (
-                                    <div className="text-center text-slate-400">
-                                        <i data-lucide="bar-chart-2" className="h-16 w-16 mx-auto mb-4 opacity-50"></i>
-                                        <p className="text-lg">No data found for "{searchTerm}"</p>
-                                        <p className="text-sm mt-2">Try searching for a different gene or upload the full dataset.</p>
+                        {/* Plots Area */}
+                        <div className="space-y-8">
+                            {plots.length > 0 ? (
+                                plots.map((plot, i) => (
+                                    <div key={plot.id + i} className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
+                                        <div className="p-4 border-b border-slate-100 bg-slate-50">
+                                            <h2 className="font-semibold text-slate-800 text-lg">
+                                                {plot.title}
+                                            </h2>
+                                        </div>
+                                        <div className="p-4 w-full">
+                                            <Plot
+                                                data={plot.data}
+                                                layout={{...plot.layout, autosize: true, paper_bgcolor: 'white', plot_bgcolor: 'white', font: { family: 'Inter, sans-serif' } }}
+                                                style={{ width: '100%', height: '100%' }}
+                                                config={{ responsive: true, displayModeBar: true }}
+                                            />
+                                        </div>
                                     </div>
-                                )}
-                            </div>
-                        </div>
-
-                         <div className="mt-8 grid grid-cols-1 md:grid-cols-3 gap-6 text-sm text-slate-600">
-                            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-100">
-                                <h3 className="font-semibold text-slate-900 mb-2 flex items-center gap-2">
-                                    <i data-lucide="layout" className="h-4 w-4"></i> Faceted View
-                                </h3>
-                                <p>Data is now split by Channel (e.g., L, M, H) into separate side-by-side plots for clearer comparison.</p>
-                            </div>
-                            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-100">
-                                <h3 className="font-semibold text-slate-900 mb-2 flex items-center gap-2">
-                                    <i data-lucide="bar-chart" className="h-4 w-4"></i> Transparency
-                                </h3>
-                                <p>Bars are colored by Group (Dark Blue/Red) with different transparency levels distinguishing Patient ID.</p>
-                            </div>
-                            <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-100">
-                                <h3 className="font-semibold text-slate-900 mb-2 flex items-center gap-2">
-                                    <i data-lucide="mouse-pointer-2" className="h-4 w-4"></i> Interaction
-                                </h3>
-                                <p>Hover over bars or dots to see precise values. Click legend items to toggle groups.</p>
-                            </div>
+                                ))
+                            ) : (
+                                <div className="bg-white rounded-xl shadow-sm p-12 text-center text-slate-400 border border-slate-200">
+                                    <i data-lucide="bar-chart-2" className="h-16 w-16 mx-auto mb-4 opacity-50"></i>
+                                    <p className="text-lg font-medium text-slate-600">No data found for "{searchTerm}"</p>
+                                    <p className="text-sm mt-2">Try searching for a different gene or ensure the correct dataset is selected.</p>
+                                    {suggestedGenes && (
+                                        <p className="text-xs text-slate-400 mt-2">Available examples: {suggestedGenes}</p>
+                                    )}
+                                </div>
+                            )}
                         </div>
 
                     </main>
