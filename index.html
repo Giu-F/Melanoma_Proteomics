@@ -300,14 +300,15 @@ Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP15_Ctrl_2h_1\t19.2\tP15\tControl`;
                 let uniqueEntities = [];
                 if (activeTab === 'proteome') {
                     const groups = [...new Set(filtered.map(d => d['Protein.Group']))];
-                    uniqueEntities = groups.slice(0, 5).map(id => ({
+                    uniqueEntities = groups.slice(0, 20).map(id => ({ // Limit increased to 20 for safety
                         id: id,
                         title: filtered.find(d => d['Protein.Group'] === id)?.Genes || id,
                         data: filtered.filter(d => d['Protein.Group'] === id)
                     }));
                 } else {
                     const sites = [...new Set(filtered.map(d => d['gene_site']))];
-                    uniqueEntities = sites.slice(0, 10).map(siteId => ({
+                    // Limit increased to 100 to support large proteins like PRKDC
+                    uniqueEntities = sites.slice(0, 100).map(siteId => ({
                         id: siteId,
                         title: siteId, 
                         data: filtered.filter(d => d['gene_site'] === siteId)
