@@ -18,6 +18,7 @@ This project is a single-page web application (SPA) designed to visualize protei
 The tool allows researchers to interactively explore the differences between **Co-culture** and **Control** groups, seamlessly toggling between proteome and phosphoproteome datasets without needing to install R or Python environments.
 
 <img width="1219" alt="Application Screenshot" src="https://github.com/user-attachments/assets/3c4b3dab-1886-433b-a149-c8b596e86bcd" />
+
 *(Screenshot of the visualization interface)*
 
 ---
