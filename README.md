@@ -8,7 +8,7 @@
 
 Developed by **Giulia Franciosa, PhD** *Jesper V. Olsen Lab, CPR, University of Copenhagen*
 
-🔗 **[View Live Application](https://your-username.github.io/your-repo-name](https://giu-f.github.io/Melanoma_Proteomics/)**
+🔗 **[View Live Application](https://giu-f.github.io/Melanoma_Proteomics/)**
 
 ---
 
