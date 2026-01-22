@@ -1,0 +1,10 @@
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+*_files/
+_freeze/
+_cache/
+.Rproj.user/
+*.Rhistory
+data/EGF/report.phosphosites_90.tsv

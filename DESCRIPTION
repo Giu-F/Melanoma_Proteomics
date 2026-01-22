@@ -1,0 +1,21 @@
+Package: MelanomaProteomics
+Title: Work in Progress - Melanoma Analysis
+Version: 0.0.0.9000
+Authors@R: person("Giulia", "Franciosa", email = "giulia@sund.ku.dk", role = c("aut", "cre"))
+Description: Analysis code for current melanoma proteomics project. 
+    (Draft: Descriptions to be updated upon publication).
+License: MIT + file LICENSE
+Encoding: UTF-8
+LazyData: true
+Imports: 
+    data.table,
+    tidyverse,
+    RColorBrewer,
+    ggfortify,
+    ggrepel,
+    viridis,
+    limma,
+    KEGGREST,
+    pheatmap,
+    here,
+    gridExtra

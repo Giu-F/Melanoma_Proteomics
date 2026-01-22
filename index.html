@@ -121,7 +121,11 @@ Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP15_Ctrl_2h_1\t19.2\tP15\tControl`;
                 };
 
                 // Helper to fetch and parse
-                const fetchData = async (url, type) => {
+                const fetchData = async (fileName, type) => {
+                    // Update Path: Look in the 'results/for_webpage/' folder
+                    const basePath = 'results/for_webpage/';
+                    const url = basePath + fileName;
+
                     try {
                         // Try ZIP first
                         const zipUrl = url.replace('.tsv', '.zip').replace('.txt', '.zip');
@@ -287,11 +291,15 @@ Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP15_Ctrl_2h_1\t19.2\tP15\tControl`;
 
                 const term = debouncedSearch.toLowerCase().trim();
                 
-                // 1. Filter Data
+                // 1. Filter Data (Search Logic - Gene Name OR Protein Group/ID)
                 const filtered = currentData.filter(row => {
                     const gene = (row.Genes || "").toLowerCase();
+                    const proteinId = (row['Protein.Group'] || "").toLowerCase();
+                    // Proteome uses 'Protein.Group', Phospho uses 'gene_site' or 'psite.id'
                     const id = (activeTab === 'proteome' ? row['Protein.Group'] : row['gene_site'] || row['psite.id']) || "";
-                    return gene.includes(term) || id.toLowerCase().includes(term);
+                    
+                    // Match Gene Name OR Protein Group (exact or partial) OR full ID
+                    return gene.includes(term) || proteinId.includes(term) || id.toLowerCase().includes(term);
                 });
 
                 if (filtered.length === 0) return [];
@@ -528,7 +536,7 @@ Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP15_Ctrl_2h_1\t19.2\tP15\tControl`;
 
                             <div className="flex flex-col md:flex-row gap-6 items-end">
                                 <div className="w-full md:w-1/2">
-                                    <label className="block text-sm font-medium text-slate-700 mb-2">Search Gene or ID</label>
+                                    <label className="block text-sm font-medium text-slate-700 mb-2">Search Gene or Protein ID</label>
                                     <div className="relative">
                                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                             <i data-lucide="search" className="h-5 w-5 text-slate-400"></i>
@@ -536,7 +544,7 @@ Q92963:S141_M1\tL\tRIT1\tRIT1_S141_M1\tP15_Ctrl_2h_1\t19.2\tP15\tControl`;
                                         <input
                                             type="text"
                                             className="block w-full pl-10 pr-3 py-3 border border-slate-300 rounded-lg focus:ring-2 focus:ring-red-900 focus:border-red-900 transition-colors"
-                                            placeholder={activeTab === 'proteome' ? "e.g. SLC12A2, P55011" : "e.g. RIT1, RIT1_S141"}
+                                            placeholder={activeTab === 'proteome' ? "e.g. SLC12A2, P55011" : "e.g. RIT1, RIT1_S141, Q92963"}
                                             value={searchTerm}
                                             onChange={(e) => setSearchTerm(e.target.value)}
                                         />
