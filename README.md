@@ -125,7 +125,7 @@ This application is hosted via **GitHub Pages**. Because it is a static site, th
 Distributed under the **MIT License**. See `LICENSE` for more information.
 
 ## 📬 Contact & Credits
-**Giulia Franciosa, PhD** [Link to your LinkedIn or ResearchGate]
+**Giulia Franciosa, PhD**
 
 **Jesper V. Olsen Lab** Novo Nordisk Foundation Center for Protein Research (CPR)  
 University of Copenhagen
