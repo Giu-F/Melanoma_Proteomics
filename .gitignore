@@ -7,7 +7,7 @@
 
 # --- Quarto & Knitr Cache ---
 *_files/
-analysis/**/*.html
+analysis/*.html
 _freeze/
 _cache/
 /.quarto/
