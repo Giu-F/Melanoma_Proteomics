@@ -1,0 +1,183 @@
+---
+title: "SILAC (4 patients, 30 spd) QC Report: 0h (Control)"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(arrow)
+library(here)
+library(RColorBrewer)
+
+# 2. Load the function
+source(here("R", "clean_diann_report.R"))
+
+# 3. Define the folder for this analysis
+subfolder <- "Prot_30spd_4patients_0h"
+
+# 4. Define and create output directory
+output_dir <- here("results", "SILAC_Proteome", subfolder)
+```
+
+## 2. Load and clean the data
+```{r load-data}
+#| message: false
+#| warning: false
+
+# 1. Define the path to the data
+input_path <- here("data", "SILAC_Proteome", subfolder, "report.parquet")
+
+# 2. Read the file and clean the data
+report <- clean_diann_data(input_path)
+```
+
+## 3. Data renaming and add metadata
+```{r data-specific-renaming}
+#| message: false
+#| warning: false
+
+# 1. Clean Run Names (Remove "Box1_" prefix if present)
+report$Run <- sub("^.*Box1_", "", report$Run)
+
+# 2. Fix specific Patient IDs
+report$Run <- gsub("P15", "P915", report$Run)
+report$Run <- gsub("P24", "P924", report$Run)
+
+# 3. Add metadata columns
+report$condition <- substr(report$Run, 1, nchar(report$Run) - 2)
+cat("Unique conditions:\n")
+cat(paste(sort(unique(report$condition)), collapse = ", "))
+report$patient <- sub("_.*", "", report$condition)
+cat("Unique patients:\n")
+cat(paste(unique(report$patient), collapse = ", "))
+report$cell.type = ifelse(grepl("TCL", report$condition), "TCL", "TILs")
+cat("Unique cell types:\n")
+cat(paste(unique(report$cell.type), collapse = ", "))
+
+# 4. Save filtered data
+arrow::write_parquet(report, file.path(output_dir, "report_filtered.parquet"))
+```
+
+## 4. Id Count
+```{r count}
+#| message: false
+#| warning: false
+
+# 1. Calculate protein counts per Channel and Run
+pg_count <- report %>%
+  group_by(Channel, condition, patient, cell.type, Run) %>%
+  summarise(n = n_distinct(Protein.Group), .groups = "drop")
+
+# 2. Calculate precursor counts per Channel and Run
+pr_count <- report %>%
+  group_by(Channel, condition, patient, cell.type, Run) %>%
+  summarise(n = n_distinct(Precursor.Id), .groups = "drop")
+
+# 3. Save Count Tables
+write_tsv(pg_count, file.path(output_dir, "Count.PG.per-run.txt"))
+write_tsv(pr_count, file.path(output_dir, "Count.pr.per-run.txt"))
+```
+
+## 5. Plot Count Data
+```{r plot-counts}
+#| message: false
+#| warning: false
+
+# 1. Prepare Protein Group stats
+Id_stats <- pg_count %>%
+  # Calculate Mean and SD
+  group_by(cell.type, patient, Channel) %>%
+  summarise(
+    mean = mean(n, na.rm = TRUE),
+    st.dev = sd(n, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  # Fill missing combinations with 0 for the plot
+  complete(cell.type, patient, Channel, fill = list(mean = 0, st.dev = 0))
+
+# 2. Plot Protein Group Counts
+ggplot(Id_stats, aes(x = cell.type, y = mean, fill = patient)) +
+  geom_bar(
+    stat = "identity",
+    position = position_dodge(),
+    colour = "black",
+    lwd = 0.2
+  ) +
+  geom_errorbar(
+    aes(ymin = mean - st.dev, ymax = mean + st.dev),
+    width = 0.2,
+    position = position_dodge(width = 0.9)
+  ) +
+  geom_text(
+    aes(label = round(mean, 0)),
+    position = position_dodge(width = 0.9),
+    vjust = -2,
+    size = 3
+  ) +
+  scale_fill_brewer(palette = "Set3") +
+  theme_minimal(base_size = 14) +
+  facet_wrap( ~ Channel) +
+  labs(
+    title = paste("Protein IDs:", subfolder),
+    y = "PG Count",
+    x = ""
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+```
+
+## 6. Calculate Labeling Efficiency & FDR
+
+```{r labeling-efficiency-FDR}
+#| message: false
+#| warning: false
+
+# 1. Labeling Efficiency (TCL cells)
+# Definition: Percentage of signal in Heavy channel vs Total
+eff_tcl <- Id_stats %>%
+  filter(cell.type == "TCL") %>%
+  group_by(patient) %>%
+  summarise(
+    efficiency_pct = mean[Channel == "H"] / sum(mean) * 100,
+    .groups = "drop"
+  )
+
+cat("\n--- Labeling Efficiency (TCL: % Heavy) ---\n")
+print(as.data.frame(eff_tcl), row.names = FALSE)
+
+# 2. Channel FDR (TILs cells)
+# Checking how much signal ends up in Heavy for TILs (should be near 0)
+fdr_tils <- Id_stats %>%
+  filter(cell.type == "TILs") %>%
+  group_by(patient) %>%
+  summarise(
+    fdr_h_pct = mean[Channel == "H"] / sum(mean) * 100,
+    .groups = "drop"
+  )
+
+cat("\n--- Channel FDR (TILs: % Noise in Heavy) ---\n")
+print(as.data.frame(fdr_tils), row.names = FALSE)
+
+# 3. Medium Channel FDR (All cells)
+# Checking signal in Medium (should be near 0 for this experiment)
+fdr_medium <- Id_stats %>%
+  group_by(cell.type, patient) %>%
+  summarise(
+    fdr_m_pct = mean[Channel == "M"] / sum(mean) * 100,
+    .groups = "drop"
+  )
+
+cat("\n--- Channel FDR (% Signal in Medium) ---\n")
+print(as.data.frame(fdr_medium), row.names = FALSE)
+```

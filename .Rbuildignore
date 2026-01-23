@@ -1,2 +1,17 @@
 ^.*\.Rproj$
 ^\.Rproj\.user$
+^LICENSE\.md$
+^README\.Rmd$
+^README\.html$
+^\.gitignore$
+^\.github$
+
+# --- Quarto Caches ---
+^_freeze$
+^_site$
+^.*\.qmd$
+
+# --- BIG DATA & RESULTS (Critical!) ---
+^data$
+^results$
+^analysis$

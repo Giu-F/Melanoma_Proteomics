@@ -3,9 +3,10 @@ title: "01) Phosphoproteomic profiling of SCC-25 cells stimulated with EGF and l
 author: "Giulia Franciosa"
 format: 
   html:
+    embed-resources: true
+    theme: cosmo
     code-fold: true
     toc: true
-editor: visual
 ---
 
 ## 1. Setup and Libraries

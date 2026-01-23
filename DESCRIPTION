@@ -18,4 +18,11 @@ Imports:
     KEGGREST,
     pheatmap,
     here,
-    gridExtra
+    gridExtra,
+    arrow,
+    reshape2,
+    readr
+    
+    
+    
+    

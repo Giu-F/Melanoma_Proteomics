@@ -1,10 +1,23 @@
+# --- R & RStudio specific ---
 .Rproj.user
 .Rhistory
 .RData
 .Ruserdata
+.RDataTmp
+
+# --- Quarto & Knitr Cache ---
 *_files/
+analysis/**/*.html
 _freeze/
 _cache/
-.Rproj.user/
-*.Rhistory
+/.quarto/
+
+# --- Large Data & Results ---
 data/EGF/report.phosphosites_90.tsv
+data/SILAC_Proteome/
+results/EGF/
+results/SILAC_Proteome/
+
+# --- System files ---
+.DS_Store
+Thumbs.db
