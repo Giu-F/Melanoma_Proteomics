@@ -58,7 +58,7 @@ cat(unique(report$Run), sep = "\n")
 
 # 2. Add metadata columns
 report$condition <- substr(report$Run, 1, nchar(report$Run) - 6)
-cat("Unique conditions after adding metadata:\n")
+cat("Unique conditions:\n")
 cat(unique(report$condition), sep = "\n")
 
 # 3. Save filtered data

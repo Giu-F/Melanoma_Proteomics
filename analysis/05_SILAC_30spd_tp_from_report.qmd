@@ -1,5 +1,5 @@
 ---
-title: "SILAC (4 patients, 30 spd) QC Report: 0h (Control)"
+title: "SILAC (4 patients, 30 spd) QC Report: 2 & 6 h"
 author: "Giulia Franciosa"
 format: 
   html:
@@ -8,7 +8,7 @@ format:
     code-fold: true
     toc: true
 params:
-  subfolder: "Prot_180spd_patient09_2h" # Default for testing
+  subfolder: "Prot_30spd_4patients_2h" # Default for testing
 ---
 
 ## 1. Setup and load libraries
@@ -22,9 +22,11 @@ library(data.table)
 library(arrow)
 library(here)
 library(RColorBrewer)
+library(readr)
 
-# 2. Load the function
+# 2. Load the functions
 source(here("R", "clean_diann_report.R"))
+source(here("R", "make_pivot_matrix.R"))
 
 # 3. Define output directory based on the parameter
 output_dir <- here("results", "SILAC_Proteome", params$subfolder)
@@ -42,49 +44,51 @@ input_path <- here("data", "SILAC_Proteome", params$subfolder, "report.parquet")
 report <- clean_diann_data(input_path)
 ```
 
-# 3. Data renaming and add metadata
+## 3. Data renaming and add metadata
 ```{r data-specific-renaming}
 #| message: false
 #| warning: false
 
 # 1. Clean Run Names
-report$Run <- sub("^.*Human_05_", "", report$Run)
-cat("Unique Runs after cleaning:\n")
-cat(unique(report$Run), sep = "\n")
+report$Run <- sub("^.*Box2_", "", report$Run)
 
-# 2. Add metadata columns
-report$condition <- substr(report$Run, 1, nchar(report$Run) - 9)
+# 2. Fix specific Patient IDs
+report$Run <- gsub("P15", "P915", report$Run)
+report$Run <- gsub("P24", "P924", report$Run)
+cat("Number of unique Runs after cleaning:\n")
+cat(length(unique(report$Run)), "\n")
+
+# 3. Add metadata columns
+report$condition <- substr(report$Run, 1, nchar(report$Run) - 2)
 cat("Unique conditions:\n")
 cat(unique(report$condition), sep = "\n")
-report$condition <- factor(
-  report$condition,
-  levels = c(
-    "Ratio11_Ctrl",
-    "TCL_Ctrl",
-    "TILs_Ctrl",
-    "Co",
-    "Co_TCL",
-    "Co_TILs"
-  )
-)
 
-# 3. Save filtered data
+report$group <- ifelse(grepl("Co", report$condition), "Co-culture", "Control")
+cat("Unique groups:\n")
+cat(unique(report$group), sep = "\n")
+report$group <- factor(report$group, levels = c("Control", "Co-culture"))
+
+report$patient   <- sub("_.*", "", report$condition)
+cat("Unique patient IDs:\n")
+cat(unique(report$patient), sep = "\n")
+
+# 4. Save filtered data
 arrow::write_parquet(report, file.path(output_dir, "report_filtered.parquet"))
 ```
 
-# 4. Id Count
+## 4. Id Count
 ```{r count}
 #| message: false
 #| warning: false
 
 # 1. Calculate protein counts per Channel and Run
 pg_count <- report %>%
-  group_by(Channel, condition, Run) %>%
+  group_by(Channel, condition, patient, group, Run) %>%
   summarise(n = n_distinct(Protein.Group), .groups = "drop")
 
 # 2. Calculate precursor counts per Channel and Run
 pr_count <- report %>%
-  group_by(Channel, condition, Run) %>%
+  group_by(Channel, condition, patient, group, Run) %>%
   summarise(n = n_distinct(Precursor.Id), .groups = "drop")
 
 # 3. Save Count Tables
@@ -92,7 +96,7 @@ write_tsv(pg_count, file.path(output_dir, "Count.PG.per-run.txt"))
 write_tsv(pr_count, file.path(output_dir, "Count.pr.per-run.txt"))
 ```
 
-# 5. Plot Count Data
+## 5. Plot Count Data
 ```{r plot-counts}
 #| message: false
 #| warning: false
@@ -100,19 +104,15 @@ write_tsv(pr_count, file.path(output_dir, "Count.pr.per-run.txt"))
 # 1. Prepare Protein Group stats
 Id_stats <- pg_count %>%
   # Calculate Mean and SD
-  group_by(condition, Channel) %>%
+  group_by(group, patient, Channel) %>%
   summarise(
     mean = mean(n, na.rm = TRUE),
     st.dev = sd(n, na.rm = TRUE),
     .groups = "drop"
-  ) %>%
-  # Fill missing combinations with 0 for the plot
-  complete(condition,
-           Channel = c("H", "L", "M"),
-           fill = list(mean = 0, st.dev = 0))
+  )
 
 # 2. Plot Protein Group Counts
-ggplot(Id_stats, aes(x = condition, y = mean, fill = Channel)) +
+ggplot(Id_stats, aes(x = group, y = mean, fill = patient)) +
   geom_bar(
     stat = "identity",
     position = position_dodge(),
@@ -124,21 +124,50 @@ ggplot(Id_stats, aes(x = condition, y = mean, fill = Channel)) +
     width = 0.2,
     position = position_dodge(width = 0.9)
   ) +
+  #add mean value labels and turn the text 90 degrees
   geom_text(
     aes(label = round(mean, 0)),
     position = position_dodge(width = 0.9),
-    vjust = -2,
+    angle = 90,
+    vjust = 0.5,
+    hjust = 1.5,
     size = 3
   ) +
   scale_fill_brewer(palette = "Set3") +
   theme_minimal(base_size = 12) +
+  facet_wrap( ~ Channel) +
   labs(
     title = paste("Protein IDs:", params$subfolder),
     y = "PG Count",
     x = ""
   ) +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  scale_y_continuous(
-    limits = c(0, 8000),
-    breaks = seq(0, 8000, 2000))
+  scale_y_continuous(limits = c(0, 10000), breaks = seq(0, 10000, 2500))
+```
+
+## 6. Create and save a Pivot matrix
+```{r make-pivot-matrix}
+#| message: false
+#| warning: false
+
+matrix_wide <- make_pivot_matrix(report, value_var = "PG.MaxLFQ")
+glimpse(matrix_wide)
+
+# Export Matrix
+write_tsv(matrix_wide, file.path(output_dir, paste0("PG.MaxLFQ_matrix_", params$subfolder, ".tsv")))
+```
+
+## 7. Save Long Format
+```{r save-long-format}
+#| message: false
+#| warning: false
+
+# 1. Select only the relevant columns for the long report
+report_protein <- report %>%
+  select(Run, Channel, Protein.Group, Protein.Names, Genes, PG.MaxLFQ) %>%
+  distinct()
+glimpse(report_protein)
+# This file (compressed zip version) for the 6h tp is the input for the web app! 
+
+# Save it using the dynamic subfolder name
+write_tsv(report_protein, file.path(output_dir, paste0("PG.MaxLFQ_long_", params$subfolder, ".tsv")))
 ```

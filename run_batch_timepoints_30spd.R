@@ -1,5 +1,5 @@
 # ==============================================================================
-# SCRIPT: run_batch_timepoints_180spd.R
+# SCRIPT: run_batch_timepoints_30spd.R
 # PURPOSE: Automatically generate QC reports for 2h and 6h timepoints
 # LOCATION: Save this in your Project Root folder
 # ==============================================================================
@@ -9,8 +9,8 @@ library(here)
 
 # 1. LIST YOUR FOLDERS HERE
 folders_to_process <- c(
-  "Prot_180spd_patient09_2h",
-  "Prot_180spd_patient09_6h"
+  "Prot_30spd_4patients_2h",
+  "Prot_30spd_4patients_6h"
 )
 
 # 2. START THE LOOP
@@ -32,7 +32,7 @@ for (folder in folders_to_process) {
   tryCatch({
     # Render the Template
     quarto_render(
-      input = "analysis/04_SILAC_180spd_tp_from_report.qmd",  # This must match the QMD filename
+      input = "analysis/05_SILAC_30spd_tp_from_report.qmd",  # This must match the QMD filename
       output_file = html_name,
       execute_params = list(subfolder = folder)    # Passes the folder name to the QMD
     )
