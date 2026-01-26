@@ -1,5 +1,5 @@
 # ==============================================================================
-# SCRIPT: run_batch_timepoints_180spd.R
+# SCRIPT: run_batch_timepoints_180_40_spd.R
 # PURPOSE: Automatically generate QC reports for 2h and 6h timepoints
 # LOCATION: Save this in your Project Root folder
 # ==============================================================================
@@ -9,8 +9,11 @@ library(here)
 
 # 1. LIST YOUR FOLDERS HERE
 folders_to_process <- c(
-  "Prot_180spd_patient09_2h",
-  "Prot_180spd_patient09_6h"
+  "Prot_180spd_patient05_2h",
+  "Prot_180spd_patient05_6h",
+  "Prot_40spd_120K_2Th_patient05_6h",
+  "Prot_40spd_120K_6Th_patient05_6h",
+  "Prot_40spd_240K_2Th_patient05_6h"
 )
 
 # 2. START THE LOOP

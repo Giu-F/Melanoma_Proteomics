@@ -1,5 +1,5 @@
 ---
-title: "SILAC (4 patients, 30 spd) QC Report: 0h (Control)"
+title: "SILAC (patient 905, 180 & 40 spd) QC Report: 2 & 6 h"
 author: "Giulia Franciosa"
 format: 
   html:
@@ -42,7 +42,7 @@ input_path <- here("data", "SILAC_Proteome", params$subfolder, "report.parquet")
 report <- clean_diann_data(input_path)
 ```
 
-# 3. Data renaming and add metadata
+## 3. Data renaming and add metadata
 ```{r data-specific-renaming}
 #| message: false
 #| warning: false
@@ -72,7 +72,7 @@ report$condition <- factor(
 arrow::write_parquet(report, file.path(output_dir, "report_filtered.parquet"))
 ```
 
-# 4. Id Count
+## 4. Id Count
 ```{r count}
 #| message: false
 #| warning: false
@@ -92,7 +92,7 @@ write_tsv(pg_count, file.path(output_dir, "Count.PG.per-run.txt"))
 write_tsv(pr_count, file.path(output_dir, "Count.pr.per-run.txt"))
 ```
 
-# 5. Plot Count Data
+## 5. Plot Count Data
 ```{r plot-counts}
 #| message: false
 #| warning: false
