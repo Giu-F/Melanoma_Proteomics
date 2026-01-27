@@ -18,6 +18,7 @@ format:
 library(tidyverse)
 library(here)
 library(RColorBrewer)
+library(knitr)
 ```
 
 ## 2. Data Loading

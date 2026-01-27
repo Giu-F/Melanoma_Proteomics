@@ -1,0 +1,162 @@
+---
+title: "Method Optimization: CV Analysis (40spd)"
+subtitle: "PG Coefficient of Variation across methods"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+library(arrow)
+library(tidyverse)
+library(data.table)
+library(here)
+library(knitr)
+library(RColorBrewer)
+```
+
+
+## 2. Data Loading
+```{r data-loading}
+#| message: false
+#| warning: false
+
+# 1. CONFIGURATION: Define Folders and Labels 
+folders_config <- list(
+  "Prot_40spd_240K_2Th_patient05_6h" = "240K_2Th",
+  "Prot_40spd_120K_2Th_patient05_6h" = "120K_2Th",
+  "Prot_40spd_120K_6Th_patient05_6h" = "120K_6Th"
+)
+
+# 2. HELPER FUNCTION: Load and Label
+load_parquet_and_label <- function(folder, label) {
+  file_path <- here("results",
+                    "SILAC_Proteome",
+                    folder,
+                    "report_filtered.parquet")
+  if (file.exists(file_path)) {
+    # Load with Arrow (fast)
+    df <- read_parquet(file_path,
+                       col_select = c("Run", "Channel", "Protein.Group", "PG.MaxLFQ")) %>%
+      as.data.table()
+    # Remove duplicates and generate a PG report
+    df <- unique(df)
+    # Add Method Label
+    df$Method <- label
+    # Remove Ctrl Runs
+    df <- df[!grepl("Ratio11_Ctrl", df$Run), ]
+    return(df)
+  } else {
+    warning(paste("⚠️ Parquet not found in:", folder))
+    return(NULL)
+  }
+}
+
+# 3. Execute the LOOP
+report_list <- mapply(
+  load_parquet_and_label, 
+  names(folders_config), 
+  folders_config, 
+  SIMPLIFY = FALSE
+)
+
+# 4. Data Preview
+head(report_list[[1]]) %>% kable(caption = "Preview of Loaded Data from 240K_2Th Dataset")
+```
+
+## 3. Calculate CVs
+```{r calculate-cvs}
+#| message: false
+#| warning: false
+
+# 1. Define the CV calculation function
+calc_cv_for_dataset <- function(df) {
+  stats <- df %>%
+    group_by(Protein.Group, Channel, Method) %>%
+    # Filter: Must be present in at least 3 replicates
+    filter(n() >= 3) %>%
+    summarise(CV_percent = (sd(PG.MaxLFQ, na.rm = TRUE) / mean(PG.MaxLFQ, na.rm = TRUE)) * 100, .groups = "drop")
+  return(stats)
+}
+
+# 2. Apply the function to the list
+cv_list <- lapply(report_list, calc_cv_for_dataset)
+
+# 3. Combine the results
+cv_data <- bind_rows(cv_list)
+
+# 4. Set Factor Levels
+cv_data$Method <- factor(cv_data$Method, levels = c("240K_2Th", "120K_2Th", "120K_6Th"))
+
+# 5. Preview CV Data
+head(cv_data) %>% kable(caption = "Preview of CV Data")
+
+# 6. Save CV Data
+cv_data_path <- here("results", "SILAC_Proteome", "Prot_40spd_patient05_6h_CV")
+write.table(cv_data, 
+              file = paste0(cv_data_path, ".tsv"), 
+              sep = "\t", 
+              row.names = FALSE, 
+              quote = FALSE)
+```
+
+## 4. Visualize CV Distributions
+```{r visualize-cvs}
+#| message: false
+#| warning: false
+
+# 1. Categorize CVs
+cv_data$CV_Category <- ifelse(cv_data$CV_percent < 10, "below 10%", 
+                        ifelse(cv_data$CV_percent < 20, "below 20%", "above 20%"))
+
+# 2. Summarize Counts
+cv_counts <- cv_data %>%
+  group_by(Method, Channel, CV_Category) %>%
+  summarise(n = n(), .groups = "drop")
+
+# 3. Set Factor Levels
+cv_counts$CV_Category <- factor(cv_counts$CV_Category, levels = c("above 20%", "below 20%", "below 10%"))
+cv_counts$Method <- factor(cv_counts$Method, levels = c("240K_2Th", "120K_2Th", "120K_6Th"))
+
+# 4. Plot
+ggplot(cv_counts, aes(x = Method, y = n, fill = CV_Category)) +
+  geom_bar(stat = "identity", 
+           position = "stack", 
+           color = "black", 
+           width = 0.7) +
+  geom_text(aes(label = n), 
+            position = position_stack(vjust = 0.5),
+            size = 3,
+            fontface = "bold") +
+  facet_wrap(~ Channel, ncol = 3) +
+  scale_fill_manual(values = brewer.pal(3, "PuBu")) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  ) +
+  labs(
+    title = "Protein Quantification Quality",
+    subtitle = "Number of Proteins with Good (<10%) vs. Poor (>20%) CVs",
+    y = "Number of Protein Groups",
+    x = NULL,
+    fill = "CV Range"
+  )
+```
+
+
+
+
+
+
+
+
