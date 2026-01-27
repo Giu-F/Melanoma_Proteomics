@@ -50,7 +50,7 @@ report <- clean_diann_data(input_path)
 # 1. Clean Run Names
 report$Run <- sub("^.*Human_05_", "", report$Run)
 cat("Unique Runs after cleaning:\n")
-cat(unique(report$Run), sep = "\n")
+cat(sort(unique(report$Run)), sep = "\n")
 
 # 2. Add metadata columns
 report$condition <- substr(report$Run, 1, nchar(report$Run) - 9)
@@ -97,21 +97,40 @@ write_tsv(pr_count, file.path(output_dir, "Count.pr.per-run.txt"))
 #| message: false
 #| warning: false
 
-# 1. Prepare Protein Group stats
+# 1. Exclude bad runs
+bad_runs <- pg_count %>%
+  group_by(Run) %>%
+  summarise(max_n = max(n, na.rm = TRUE)) %>%
+  filter(max_n < 200) %>%
+  pull(Run)
+
+# 2. Print bad runs
+if(length(bad_runs) > 0) {
+  cat("Removing the following low-quality runs (< 200 IDs):\n")
+  print(bad_runs)
+} else {
+  cat("No runs removed.\n")
+}
+
+# 3. Prepare Protein Group stats
 Id_stats <- pg_count %>%
-  # Calculate Mean and SD
+  #remove bad runs
+  filter(!Run %in% bad_runs) %>%
+  #calculate Mean and SD
   group_by(condition, Channel) %>%
   summarise(
     mean = mean(n, na.rm = TRUE),
     st.dev = sd(n, na.rm = TRUE),
     .groups = "drop"
-  ) %>%
-  # Fill missing combinations with 0 for the plot
-  complete(condition,
-           Channel = c("H", "L", "M"),
-           fill = list(mean = 0, st.dev = 0))
+  )
 
-# 2. Plot Protein Group Counts
+# 4. Define the y axis limits
+# Find the highest point on the plot (Mean + Error Bar)
+max_val <- max(Id_stats$mean + Id_stats$st.dev, na.rm = TRUE)
+# Add 2000 buffer and round to the nearest 1000 for a clean axis
+y_limit <- round(max_val + 2000, digits = -3)
+
+# 5. Plot Protein Group Counts
 ggplot(Id_stats, aes(x = condition, y = mean, fill = Channel)) +
   geom_bar(
     stat = "identity",
@@ -139,6 +158,7 @@ ggplot(Id_stats, aes(x = condition, y = mean, fill = Channel)) +
   ) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   scale_y_continuous(
-    limits = c(0, 8000),
-    breaks = seq(0, 8000, 2000))
+    limits = c(0, y_limit),
+    breaks = seq(0, y_limit, by = 2000)
+  )
 ```

@@ -35,7 +35,7 @@ for (folder in folders_to_process) {
   tryCatch({
     # Render the Template
     quarto_render(
-      input = "analysis/04_SILAC_180spd_tp_from_report.qmd",  # This must match the QMD filename
+      input = "analysis/04_SILAC_180_40_spd_tp_from_report.qmd",  # This must match the QMD filename
       output_file = html_name,
       execute_params = list(subfolder = folder)    # Passes the folder name to the QMD
     )
