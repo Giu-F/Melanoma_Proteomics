@@ -163,7 +163,7 @@ write_tsv(matrix_wide, file.path(output_dir, paste0("PG.MaxLFQ_matrix_", params$
 
 # 1. Select only the relevant columns for the long report
 report_protein <- report %>%
-  select(Run, Channel, Protein.Group, Protein.Names, Genes, PG.MaxLFQ) %>%
+  select(Run, Channel, Protein.Group, Protein.Names, Genes, PG.MaxLFQ, group, patient) %>%
   distinct()
 glimpse(report_protein)
 # This file (compressed zip version) for the 6h tp is the input for the web app! 

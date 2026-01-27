@@ -1,0 +1,310 @@
+---
+title: "Proteome 30spd 4 patients: all time points combined"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+library(data.table)
+library(tidyverse)
+library(here)
+library(eulerr)
+library(pheatmap)
+library(RColorBrewer)
+library(knitr)
+```
+
+## 2. Data Loading
+```{r load_data}
+#| message: false
+#| warning: false
+
+# 1. CONFIGURATION: Map Folders to Time Point Labels
+# Format: "Folder_Name" = "Tp Label"
+folders_config <- list(
+  "Prot_30spd_4patients_0h" = "0h",
+  "Prot_30spd_4patients_2h" = "2h",
+  "Prot_30spd_4patients_6h" = "6h"
+)
+
+# 2. HELPER FUNCTION: Load and Label
+load_and_label <- function(folder, label, file_pattern) {
+  # Construct full path to the folder
+  folder_path <- here("results", "SILAC_Proteome", folder)
+  # Find the file that matches the pattern
+  file_path <- list.files(folder_path, pattern = file_pattern, full.names = TRUE)[1]
+  if (!is.na(file_path) && file.exists(file_path)) {
+    df <- fread(file_path)
+    df$tp <- label
+    return(df)
+  } else {
+    warning(paste("⚠️ File not found in:", folder))
+    return(NULL)
+  }
+}
+
+# 3. EXECUTE LOOP
+# Load Protein Groups (pg)
+data_list <- mapply(
+  function(f, l)
+    load_and_label(f, l, "PG.MaxLFQ_long_.*\\.tsv"),
+  names(folders_config),
+  folders_config,
+  SIMPLIFY = FALSE
+)
+
+# 4. Replace P605_Co_6h_4_2 with P605_Co_6h_4
+data_list[[3]]$Run <- gsub("P605_Co_6h_4_2", "P605_Co_6h_4", data_list[[3]]$Run)
+
+# 5. Combine Data
+data <- rbindlist(data_list, use.names = TRUE, fill = TRUE)
+
+# 6. Data Overview
+cat("Data dimensions (rows, columns):", dim(data), "\n")
+glimpse(data)
+```
+
+## 3. Count PG
+```{r count_pg}
+#| message: false
+#| warning: false
+
+# 1. Count unique Protein Groups and channel
+cat("Total unique Protein Groups and Channels:", length(unique(paste0(data$Protein.Group, data$Channel))), "\n")
+
+# 2. Count unique Protein Groups
+cat("Total unique Protein Groups:", length(unique(data$Protein.Group)), "\n")
+
+# 3. Count unique Protein Groups per channel
+count_channel <- data %>%
+  group_by(Channel) %>%
+  summarise(n = n_distinct(Protein.Group))
+cat("Unique Protein Groups per Channel:\n")
+print(count_channel)
+
+# 4. Count unique Protein Groups shared across all channels
+shared <- data %>%
+  distinct(Protein.Group, Channel) %>%
+  count(Protein.Group) %>%
+  filter(n == 3) %>%
+  pull(Protein.Group)
+cat("Unique Protein Groups shared across all Channels:\n")
+length(shared)
+
+# 5. Count unique Protein Groups shared by least 2 channels
+shared_2 <- data %>%
+  distinct(Protein.Group, Channel) %>%
+  count(Protein.Group) %>%
+  filter(n >= 2) %>%
+  pull(Protein.Group)
+cat("Unique Protein Groups shared by at least 2 Channels:\n")
+length(shared_2)
+
+# 6. Count unique Protein Groups per channel and run, and average per channel and tp (no 0h)
+pg.count.av <- data %>%
+  filter(tp != "0h") %>%
+  group_by(Channel, Run, tp) %>%
+  summarise(n = n_distinct(Protein.Group)) %>%
+  group_by(Channel, tp) %>%
+  summarise(mean = mean(n, na.rm = T))
+cat("Average Unique Protein Groups per Channel & time point (no 0h):\n")
+print(pg.count.av)
+```
+
+## 4. Euler diagram
+```{r euler_diagram}
+#| message: false
+#| warning: false
+
+overlap <- list()
+for (i in c("H", "L", "M")) {
+  ids <- data %>%
+  filter(Channel == i) %>%
+  select(Protein.Group) %>%
+  distinct() %>%
+  pull()
+  overlap[[i]] <- ids
+}
+
+plot(
+  euler(overlap),
+  quantities = T,
+  fills = c("red", "blue", "yellow"),
+  main = "Protin Groups: Overlap between channels"
+)
+```
+
+## 5. Heatmap Presence/Absence
+```{r presence_absence}
+#| message: false
+#| warning: false
+#| fig.width: 12
+#| fig.height: 18
+
+# 1. Prepare Log2 Wide Matrix (Medium Channel Only)
+medium_wide <- data %>%
+  filter(Channel == "M") %>%
+  select(Protein.Group, Protein.Names, Genes, Run, PG.MaxLFQ) %>%
+  mutate(
+    PG.MaxLFQ = log2(PG.MaxLFQ)
+  ) %>%
+  pivot_wider(names_from = Run, values_from = PG.MaxLFQ) %>%
+  # Reorder columns: Metadata first, then Runs sorted alphabetically
+  select(Protein.Group, Protein.Names, Genes, sort(everything()))
+
+#print dimensions
+cat("Dimensions of Medium Wide Matrix (rows, columns):", dim(medium_wide), "\n")
+
+# 2. Define Presence/Absence Logic
+
+# Identify columns for each group dynamically
+cols_co   <- grep("Co", names(medium_wide), value = TRUE)
+cols_ctrl <- grep("Ctrl", names(medium_wide), value = TRUE)
+
+# Count valid values (non-NA) for each row in each group
+count_co   <- rowSums(!is.na(medium_wide[cols_co]))
+count_ctrl <- rowSums(!is.na(medium_wide[cols_ctrl]))
+
+# Apply thresholds (Modify 7 and 2 here if needed)
+medium_wide <- medium_wide %>%
+  mutate(
+    status = case_when(
+      count_co >= 7 & count_ctrl <= 2 ~ "up",   # Present in Co
+      count_co <= 2 & count_ctrl >= 7 ~ "down", # Present in Ctrl
+      TRUE ~ NA_character_
+    )
+  )
+
+# 3. Export Lists of Presence/Absence Proteins
+
+# Extract relevant tables
+presence_table <- medium_wide %>% filter(status == "up")
+absence_table  <- medium_wide %>% filter(status == "down")
+
+# Print Summary
+cat("Proteins unique to Co-culture (UP):", nrow(presence_table), "\n")
+cat("Proteins unique to Control (DOWN):", nrow(absence_table), "\n")
+
+# Define output path
+output_dir <- here("results", "SILAC_Proteome")
+
+# Save tables
+write.table(
+  presence_table,
+  file.path(output_dir, "presence_medium.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+
+write.table(
+  absence_table,
+  file.path(output_dir, "absence_medium.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+
+# 4. Prepare Matrix for Heatmap
+# Select only numeric columns (Runs) and ensure row names are Genes
+# We force the order: Ctrl columns first, then Co columns
+hm_matrix <- presence_table %>%
+  select(all_of(c(cols_ctrl, cols_co))) %>%
+  as.matrix()
+  
+# Set Rownames to Genes (handle duplicates if any)
+rownames(hm_matrix) <- make.unique(as.character(presence_table$Genes))
+
+# Set breaks
+breaks <- seq(min(hm_matrix, na.rm = T), max(hm_matrix, na.rm = T), length.out = 51)
+
+# Impute Missing Values for Visualization
+# (Replacing NA with a very low value)
+hm_matrix[is.na(hm_matrix)] <- 5 
+
+# 5. Heatmap Visualization (UP Proteins)
+# Color Palette (Blues)
+heatmap_colors <- colorRampPalette(brewer.pal(n = 9, name = "Blues"))(50)
+
+# Annotation (Column Metadata)
+annotation_col <- data.frame(
+  row.names = colnames(hm_matrix),
+  Group = ifelse(grepl("Co", colnames(hm_matrix)), "Co-culture", "Control"),
+  Patient = sub("_.*", "", colnames(hm_matrix)),
+  Timepoint = ifelse(grepl("2h", colnames(hm_matrix)), "2h", "6h")
+)
+# Generate Heatmap
+pheatmap(
+  hm_matrix,
+  color = heatmap_colors,
+  annotation_col = annotation_col,
+  cluster_cols = FALSE,
+  # Keep our Ctrl -> Co order
+  cluster_rows = TRUE,
+  # Cluster proteins by pattern
+  show_rownames = TRUE,
+  show_colnames = FALSE,
+  # Usually too crowded, set TRUE if needed
+  fontsize_row = 7,
+  fontsize_col = 7,
+  main = "Heatmap of Proteins Unique to Co-culture",
+  breaks = breaks
+)
+```
+
+## 6. Plot specific proteins
+```{r plot_specific_proteins}
+# Define factor levels
+data$group <- factor(data$group, levels = c("Control", "Co-culture"))
+
+#CRTAM
+CRTAM <- data %>%
+  #log2 transform PG.MaxLFQ
+  mutate(PG.MaxLFQ = log2(PG.MaxLFQ)) %>%
+  filter(Protein.Group == "O95727")
+
+ggplot(CRTAM, aes(
+  x = patient,
+  y = PG.MaxLFQ,
+  fill = group,
+  shape = tp
+)) +
+  geom_point(
+    size = 2,
+    shape = 21,
+    color = "black",
+    position = position_jitterdodge(
+      dodge.width = 0.7,
+      jitter.height = 0,
+      jitter.width = 0.2
+    )
+  ) +
+  scale_fill_brewer(palette = "Set1", direction = -1) +
+  stat_summary(
+    fun.data = "mean_cl_boot",
+    geom = "errorbar",
+    aes(ymax = after_stat(y), ymin = after_stat(y)),
+    position = position_dodge(0.7),
+    width = 0.35,
+    color = "black"
+  ) +
+  xlab("") +
+  ylab("Log2 MS intensity") +
+  ggtitle("CRTAM") +
+  theme_minimal(base_size = 12) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_wrap(~tp)
+```
+
+
+

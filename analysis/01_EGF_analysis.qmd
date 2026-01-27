@@ -10,9 +10,6 @@ format:
 ---
 
 ## 1. Setup and Libraries
-
-We use `devtools::load_all()` to automatically load our custom functions from the `/R` folder.
-
 ```{r setup}
 #| message: false
 #| warning: false
@@ -31,11 +28,10 @@ library(viridis)
 library(gridExtra)
 
 # 2. Load our project's custom functions
-devtools::load_all()
+devtools::load_all() #to automatically load our custom functions from the `/R` folder
 ```
 
 ## 2. Load Data
-
 ```{r load-data}
 #| message: false
 
@@ -51,7 +47,6 @@ glimpse(raw_data)
 ```
 
 ## 3. Data Cleaning
-
 ```{r data-cleaning}
 #| message: false
 
@@ -80,7 +75,6 @@ head(logdata)
 ```
 
 ## 4. Filter data
-
 ```{r data-filtering}
 #| message: false
 #| warning: false
@@ -115,7 +109,6 @@ cat("Removed", nrow(logdata) - nrow(logdata_f), "low-quality rows.\n")
 ```
 
 ## 5. Quality Control: Identification Rates
-
 ```{r id-count}
 #| message: false
 #| warning: false
@@ -172,7 +165,6 @@ ggplot(id_summary, aes(x = posttreatment, y = mean, fill = treatment)) +
 ```
 
 ## 6. Normalization Check
-
 ```{r normalization-check}
 #| message: false
 #| warning: false
@@ -215,7 +207,6 @@ ggplot(melt, aes(x = variable, y = value, fill = treatment, color = posttreatmen
 ```
 
 ## 7. Principal Component Analysis (PCA)
-
 ```{r pca-analysis}
 #| message: false
 #| warning: false
@@ -265,7 +256,6 @@ autoplot(pca, data = nonat_df, colour = 'treatment', shape = 'posttreatment', si
 ```
 
 ## 8. Differential Expression Analysis with Limma
-
 ```{r limma-analysis}
 #| message: false
 #| warning: false
@@ -352,7 +342,6 @@ ggplot(count_summary %>% filter(regulated != "Unchanged"),
 ```
 
 ## 9. Extract the list of genes associated with the ErbB Signaling Pathway
-
 ```{r erbB-genes}
 #| message: false
 #| warning: false
@@ -385,7 +374,6 @@ has_semicolons <- any(grepl(";", limma_results$Gene.Names))
 ```
 
 ## 10. Volcano plots
-
 ```{r volcano-plots}
 #| message: false
 #| warning: false
@@ -426,7 +414,6 @@ grid.arrange(p_IL, p_PBS, p_PI, ncol = 1)
 ```
 
 ## 11. Heatmap of ErbB Pathway Phosphosites
-
 ```{r heatmap-erbb}
 #| message: false
 #| warning: false
@@ -498,7 +485,6 @@ pheatmap(
 ```
 
 ## 12. Inpur for PTMNavigator
-
 ```{r PTMNavigator}
 #| message: false
 #| warning: false

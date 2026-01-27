@@ -20,6 +20,7 @@ library(data.table)
 library(arrow)
 library(here)
 library(RColorBrewer)
+library(readr)
 
 # 2. Load the function
 source(here("R", "clean_diann_report.R"))
@@ -59,12 +60,16 @@ report$Run <- gsub("P24", "P924", report$Run)
 report$condition <- substr(report$Run, 1, nchar(report$Run) - 2)
 cat("Unique conditions:\n")
 cat(paste(sort(unique(report$condition)), collapse = ", "))
+
 report$patient <- sub("_.*", "", report$condition)
 cat("Unique patients:\n")
 cat(paste(unique(report$patient), collapse = ", "))
+
 report$cell.type = ifelse(grepl("TCL", report$condition), "TCL", "TILs")
 cat("Unique cell types:\n")
 cat(paste(unique(report$cell.type), collapse = ", "))
+
+report$group <- "Control"
 
 # 4. Save filtered data
 arrow::write_parquet(report, file.path(output_dir, "report_filtered.parquet"))
@@ -180,4 +185,19 @@ fdr_medium <- Id_stats %>%
 
 cat("\n--- Channel FDR (% Signal in Medium) ---\n")
 print(as.data.frame(fdr_medium), row.names = FALSE)
+```
+
+## 7. Save Long Format
+```{r save-long-format}
+#| message: false
+#| warning: false
+
+# 1. Select only the relevant columns for the long report
+report_protein <- report %>%
+  select(Run, Channel, Protein.Group, Protein.Names, Genes, PG.MaxLFQ, group, patient) %>%
+  distinct()
+glimpse(report_protein)
+
+# 2. Save it
+write_tsv(report_protein, file.path(output_dir, paste0("PG.MaxLFQ_long_", subfolder, ".tsv")))
 ```
