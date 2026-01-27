@@ -1,0 +1,154 @@
+---
+title: "Proteome Method Optimization: ID Counts (40spd, 6h)"
+subtitle: "Comparison: 240K 2Th vs 120K 2Th vs 120K 6Th"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+library(tidyverse)
+library(here)
+library(RColorBrewer)
+```
+
+## 2. Data Loading
+```{r load_data}
+#| message: false
+#| warning: false
+
+# 1. CONFIGURATION: Map Folders to Method Labels
+# Format: "Folder_Name" = "Label_for_Plot"
+folders_config <- list(
+  "Prot_40spd_240K_2Th_patient05_6h" = "240K_2Th",
+  "Prot_40spd_120K_2Th_patient05_6h" = "120K_2Th",
+  "Prot_40spd_120K_6Th_patient05_6h" = "120K_6Th"
+)
+
+# 2. HELPER FUNCTION: Load and Label
+load_and_label <- function(folder, label, file_pattern) {
+  # Construct full path to the folder
+  folder_path <- here("results", "SILAC_Proteome", folder)
+  # Find the file that matches the pattern (e.g., "Count.PG")
+  # This makes it robust regardless of the exact filename
+  file_path <- list.files(folder_path, pattern = file_pattern, full.names = TRUE)[1]
+  if (!is.na(file_path) && file.exists(file_path)) {
+    df <- read.table(file_path, header = TRUE, sep = "\t")
+    df$Method <- label # Add the label column immediately
+    return(df)
+  } else {
+    warning(paste("⚠️ File not found in:", folder))
+    return(NULL)
+  }
+}
+
+# 3. EXECUTE LOOP
+# Load Protein Groups (pg)
+pg_list <- mapply(
+  function(f, l)
+    load_and_label(f, l, "Count.PG.per-run.*\\.txt"),
+  names(folders_config),
+  folders_config,
+  SIMPLIFY = FALSE
+)
+pg <- do.call(rbind, pg_list)
+rownames(pg) <- NULL
+```
+
+## 3. Data Cleaning
+```{r data_cleaning}
+
+# 1. Remove bad run: Ratio11_Ctrl_6h_repl2, 120K_2Th
+pg <- pg %>%
+  filter(!(Run == "Ratio11_Ctrl_6h_repl2" & Method == "120K_2Th"))
+
+# 2. Extract Groups
+# Remove text after "_6h" to create the 'group' column
+pg$group <- sub("_6h.*", "", pg$Run)
+cat("Unique Groups:\n")
+cat(unique(pg$group), sep = "\n")
+
+# 3. Set Factor Levels (Control the order in the plot)
+method_levels <- c("240K_2Th", "120K_2Th", "120K_6Th")
+group_levels  <- c("Ratio11_Ctrl", "Co")
+
+pg$Method <- factor(pg$Method, levels = method_levels)
+pg$group  <- factor(pg$group,  levels = group_levels)
+```
+
+## 4. Id stat
+```{r id_stats}
+
+# Summarize Protein Groups
+pg_stats <- pg %>%
+  group_by(Channel, Method, group) %>%
+  summarise(
+    mean = mean(n, na.rm=TRUE),
+    sd = sd(n, na.rm=TRUE),
+    .groups = "drop"
+  )
+
+# Preview table
+knitr::kable(head(pg_stats), caption = "Preview of Protein Group Stats")
+```
+
+## 5. Plotting
+```{r plotting}
+#| fig.width: 10
+#| fig.height: 6
+
+# Dynamic Y-Axis Limit (Max + SD + 15% buffer, rounded to 1000)
+max_val <- max(pg_stats$mean + pg_stats$sd, na.rm=TRUE)
+y_limit <- round(max_val * 1.15, digits = -3)
+
+ggplot(pg_stats, aes(x = Method, y = mean, fill = Channel)) +
+  # Bar Plot
+  geom_bar(
+    stat = "identity",
+    position = position_dodge(),
+    color = "darkgrey"
+  ) +
+  # Error Bars
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+  # Text Labels (Rounded Mean)
+  geom_text(
+    aes(label = round(mean)),
+    position = position_dodge(0.9),
+    angle = 90,
+    hjust = 2,
+    vjust = 0.3,
+    size = 3.5
+  ) +
+  # Styling
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major.x = element_blank(),
+    strip.text = element_text(face = "bold", size = 12)
+  ) +
+  scale_fill_brewer(palette = "PuBu") +
+  # Axis Scaling
+  scale_y_continuous(limits = c(0, y_limit), expand = c(0, 0)) +
+  # Titles
+  labs(
+    title = "Protein Group Counts: Patient 905 6h 40spd",
+    subtitle = "Comparing acquisition methods",
+    y = "Number of Protein Groups",
+    x = NULL
+  ) +
+  # Split by Group (Side by Side)
+  facet_wrap(~ group)
+```
+
+
+
