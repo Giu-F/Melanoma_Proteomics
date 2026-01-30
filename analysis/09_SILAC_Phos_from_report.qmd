@@ -1,0 +1,297 @@
+---
+title: "SILAC Phospho (4 patients, 40 spd) QC Report: 2 h"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(arrow)
+library(here)
+library(RColorBrewer)
+library(readr)
+library(knitr)
+library(eulerr)
+
+# 2. Load the functions
+source(here("R", "clean_diann_report_phos.R"))
+source(here("R", "expand_phospho_report.R"))
+source(here("R", "add_sequence_windows.R"))
+source(here("R", "generate_top1_matrix.R"))
+```
+
+## 2. Load and clean the data
+```{r load-data}
+#| message: true
+#| warning: false
+#| results: "markup"
+
+# 1. Define the path to the data
+input_path <- here("data", "SILAC_Phos", "report.parquet")
+
+report <- read_parquet(input_path)
+
+# 2. Read the file and clean the data
+report <- clean_diann_phos_data(input_path)
+```
+
+## 3. Data renaming and add metadata
+```{r data-specific-renaming}
+#| message: false
+#| warning: false
+
+# 1. Clean Run Names
+report$Run <- sub("^.*SILAC_", "", report$Run)
+cat("Number of unique Runs:\n")
+cat(length(unique(report$Run)), "\n")
+
+# 2. Add metadata columns
+report$group <- ifelse(grepl("Co", report$Run), "Co-culture", "Control")
+cat("Unique groups:\n")
+cat(unique(report$group), sep = "\n")
+report$group <- factor(report$group, levels = c("Control", "Co-culture"))
+
+report$patient <- sub("_.*", "", report$Run)
+cat("Unique patient IDs:\n")
+cat(unique(report$patient), sep = "\n")
+
+cat("Dimensions of the cleaned report data:\n")
+cat(dim(report), "\n")
+
+# 3. Save filtered data
+output_dir <- here("results", "SILAC_Phos")
+arrow::write_parquet(report, file.path(output_dir, "report_filtered.parquet"))
+```
+
+## 4. Precursor Count
+```{r count}
+#| message: false
+#| warning: false
+
+# 1. Calculate precursor counts per Channel
+pr_count_total <- report %>%
+  group_by(Channel) %>%
+  summarise(n = n_distinct(Precursor.Id), .groups = "drop")
+
+# 2. Calculate precursor counts per Channel and Run
+pr_count <- report %>%
+  group_by(Channel, patient, group, Run) %>%
+  summarise(n = n_distinct(Precursor.Id), .groups = "drop")
+
+# 3. Mean across replicates
+pr_count_mean <- pr_count %>% 
+  group_by(Channel, patient, group) %>% 
+  summarise(mean = mean(n, na.rm = T), st.dev = sd(n, na.rm = T))
+
+# 3. Save Count Tables
+write_tsv(pr_count_total, file.path(output_dir, "Count.pr.tot.txt"))
+write_tsv(pr_count, file.path(output_dir, "Count.pr.per-run.txt"))
+write_tsv(pr_count_mean, file.path(output_dir, "Count.pr.mean.txt"))
+```
+
+## 5. Expand phospho report
+```{r expand-phospho-report}
+#| message: true
+#| warning: false
+#| results: "markup"
+
+report_expanded <- expand_phospho_report(report)
+cat("Dimensions of the expanded phospho report data:\n")
+cat(dim(report_expanded), "\n")
+
+report_expanded %>%
+  filter(pcount == 3) %>%
+  select(PTM.Site.Confidence, 
+         Site.Occupancy.Probabilities,
+         Protein.Sites,
+         id,
+         sty,
+         site, 
+         loc.prob, 
+         pcount, 
+         psite.id) %>%
+  head(10) %>%
+  kable(caption = "Preview of report_expanded")
+```
+
+## 6. Add sequence window
+```{r add-sequence-window}
+#| message: false
+#| warning: false
+
+report_expanded <- add_sequence_windows(report_expanded)
+cat("Preview of report_expanded with sequence windows:\n")
+cat(dim(report_expanded), "\n")
+
+report_expanded %>%
+  filter(pcount == 3) %>%
+  select(psite.id,
+         site_pos,
+         window) %>%
+  head(10) %>%
+  kable(caption = "Preview of report_expanded")
+
+#save the expanded report
+arrow::write_parquet(report_expanded, file.path(output_dir, "report_expanded.parquet"))
+```
+
+## 7. Filter by loc.prob
+```{r filter-by-loc-prob}
+#| message: false
+#| warning: false
+
+report_expanded <- report_expanded[report_expanded$loc.prob >= 0.75,]
+cat("Dimensions of the filtered expanded phospho report data (loc.prob >= 0.75):\n")
+cat(dim(report_expanded), "\n")
+```
+
+## 8 Phosphosite Count
+```{r phosphosite-count}
+#| message: false
+#| warning: false
+
+# 1. Count unique psite.id and channel
+cat("Total unique Psite IDs and Channels:",
+length(unique(paste0(report_expanded$psite.id, report_expanded$Channel))), "\n")
+
+# 2. Count unique protein id and channel
+cat("Total unique Protein IDs and Channels:",
+length(unique(paste0(report_expanded$id, report_expanded$Channel))), "\n")
+
+# 3. Count unique psite.id
+cat("Total unique Psite IDs:",
+length(unique(report_expanded$psite.id)), "\n")
+
+# 4. Count unique protein id
+cat("Total unique Psite IDs:",
+length(unique(report_expanded$id)), "\n")
+
+# 5. Count unique psite.id per channel
+count_channel <- report_expanded %>%
+  group_by(Channel) %>%
+  summarise(n = n_distinct(psite.id))
+cat("Unique Psite IDs per Channel:\n")
+print(count_channel)
+
+# 6. Count unique psite.id shared across all channels
+shared <- report_expanded %>%
+  distinct(psite.id, Channel) %>%
+  count(psite.id) %>%
+  filter(n == 3) %>%
+  pull(psite.id)
+cat("Unique Psite IDs shared across all Channels:\n")
+length(shared)
+
+# 7. Count unique psite.id shared by at least 2 channels
+shared_2 <- report_expanded %>%
+  distinct(psite.id, Channel) %>%
+  count(psite.id) %>%
+  filter(n >= 2) %>%
+  pull(psite.id)
+cat("Unique Psite IDs shared by at least 2 Channels:\n")
+length(shared_2)
+
+# 8. Count unique psite.id per channel and run
+ps.count <- report_expanded %>%
+  group_by(Channel, patient, group, Run) %>%
+  summarise(n = n_distinct(psite.id))
+
+# 9. Mean per channel
+ps.count.av <- ps.count %>%
+  group_by(Channel) %>%
+  summarise(mean = mean(n, na.rm = T))
+cat("Average Unique Psite IDs per Channel:\n")
+print(ps.count.av)
+
+# 10. Mean and sd across replicates
+ps.count.mean <- ps.count %>% 
+  group_by(Channel, patient, group) %>%
+  summarise(mean = mean(n, na.rm = T), 
+            st.dev = sd(n, na.rm = T),
+            .groups = "drop")
+
+# 11. Save Psite count
+write_tsv(count_channel, file.path(output_dir, "Count.ps.total.txt"))
+write_tsv(ps.count, file.path(output_dir, "Count.ps.per-run.txt"))
+write_tsv(ps.count.mean, file.path(output_dir, "Count.ps.mean.txt"))
+
+# 12. Plot Psite Count
+ggplot(ps.count.mean, aes(x = group, y = mean, fill = patient)) +
+  geom_bar(
+    stat = "identity",
+    position = position_dodge(),
+    colour = "black",
+    lwd = 0.2
+  ) +
+  geom_errorbar(
+    aes(ymin = mean - st.dev, ymax = mean + st.dev),
+    width = 0.2,
+    position = position_dodge(width = 0.9)
+  ) +
+  geom_text(
+    aes(label = round(mean, 0)),
+    position = position_dodge(width = 0.9),
+    angle = 90,
+    vjust = 0.5,
+    hjust = 1.5,
+    size = 3
+  ) +
+  scale_fill_brewer(palette = "Set3") +
+  theme_minimal(base_size = 12) +
+  facet_wrap( ~ Channel) +
+  labs(
+    title = paste("Localized Psite IDs Phosphoproteome 4 patients 2 hours"),
+    y = "Localized Psite ID Count",
+    x = ""
+  ) +
+  scale_y_continuous(limits = c(0, 20000), breaks = seq(0, 20000, 2500))
+```
+
+## 9. Euler diagram
+```{r euler_diagram}
+#| message: false
+#| warning: false
+
+overlap <- list()
+for (i in c("H", "L", "M")) {
+  ids <- report_expanded %>%
+  filter(Channel == i) %>%
+  select(psite.id) %>%
+  distinct() %>%
+  pull()
+  overlap[[i]] <- ids
+}
+
+plot(
+  euler(overlap),
+  quantities = T,
+  fills = c("red", "blue", "yellow"),
+  main = "Psite ID: Overlap between channels"
+)
+```
+
+## 10. Generate Top1 Phosphosite Matrix
+```{r make-pivot-matrix}
+#| message: false
+#| warning: false
+
+phosphosite_matrix <- generate_top1_matrix(report_expanded)
+cat("Dimensions of the Phosphosite Top1 Matrix:\n")
+cat(dim(phosphosite_matrix), "\n")
+glimpse(phosphosite_matrix)
+
+# Export Matrix
+write_tsv(phosphosite_matrix, file.path(output_dir, "Phosphosite_Top1_Matrix.tsv"))
+```
+
