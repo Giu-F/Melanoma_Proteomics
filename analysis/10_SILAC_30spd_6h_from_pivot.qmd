@@ -1,0 +1,284 @@
+---
+title: "SILAC Proteome (4 patients, 30 spd) from Pivot Matrix: 6 h"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(here)
+library(RColorBrewer)
+library(readr)
+library(knitr)
+library(eulerr)
+library(limma)
+library(pheatmap)
+```
+
+## 2. Load the data and log2 transform
+```{r load-data}
+#| message: false
+#| warning: false
+
+# 1. Load data
+input_file <- here("results", "SILAC_proteome", "Prot_30spd_4patients_6h", "PG.MaxLFQ_matrix_Prot_30spd_4patients_6h.tsv")
+data <- fread(input_file)
+data <- as.data.frame(data)
+
+cat("Data dimensions:", dim(data), "\n")
+cat("Column names (first 10):", colnames(data)[1:10], "\n")
+
+# 2. Log2 transform
+data[,5:ncol(data)] <- log2(data[,5:ncol(data)])
+# Change -inf to NA
+data[data == -Inf] <- NA
+```
+
+## 3. Differential Expression Analysis with Limma
+```{r differential-expression}
+#| message: false
+#| warning: false
+
+# 1. PREPARE DATA
+# Create a list of 3 matrices (H, L, M)
+# We keep only the Intensity "6h" columns + row names
+limma_list <- data %>%
+  select(Protein.Group, Channel, contains("6h")) %>%
+  split(.$Channel) %>%
+  map(~ .x %>%
+        remove_rownames() %>%
+        column_to_rownames("Protein.Group") %>% 
+        select(contains("6h")))
+
+cat("Number of proteins per channel:\n")
+sapply(limma_list, nrow)
+
+# 2. FILTERING LOOP
+# Iterate over the list
+list_filtered <- map(limma_list, function(mat) {
+  
+  # A. Identify Patients dynamically
+  patients <- unique(sub("_.*", "", colnames(mat)))
+  
+  # B. Filter: at least 3 patients with 2 valid values
+  #At least 2 valid values per patient
+  patient_validity <- sapply(patients, function(p) {
+    cols <- grep(p, colnames(mat))
+    rowSums(!is.na(mat[, cols])) >= 2
+  })
+  # Keep rows where at least 3 patients pass the check
+  keep_patients <- rowSums(patient_validity) >= 3
+  
+  # C. Filter: At least 3 valid in Ctrl AND 3 in Co-culture
+  ctrl_cols <- grep("Ctrl", colnames(mat))
+  co_cols   <- grep("Co",   colnames(mat))
+  
+  keep_groups <- rowSums(!is.na(mat[, ctrl_cols])) >= 3 & 
+                 rowSums(!is.na(mat[, co_cols]))   >= 3
+  
+  # Return the filtered matrix
+  return(mat[keep_patients & keep_groups, ])
+})
+
+cat("Number of proteins per channel after filtering:\n")
+sapply(list_filtered, nrow)
+
+# 3. STATS LOOP (Limma)
+limma_results <- imap_dfr(list_filtered, function(mat, channel_name) {
+  
+  cat(paste("Running Limma for:", channel_name), "\n")
+  
+  # Define Groups
+  patient <- sub("_.*", "", colnames(mat))
+  group   <- ifelse(grepl("Co_", colnames(mat)), "Co-culture", "Control")
+  group   <- factor(group, levels = c("Control", "Co-culture"))
+  
+  # Design & Correlation
+  design <- model.matrix(~ group)
+  corfit <- duplicateCorrelation(mat, design, block = patient)
+  
+  # Fit
+  fit <- lmFit(mat, design, block = patient, correlation = corfit$consensus.correlation)
+  cat("Consensus correlation:", corfit$consensus.correlation, "\n")
+  fit <- eBayes(fit, trend = TRUE)
+  
+  # Extract Table
+  topTable(fit, coef = 2, number = nrow(fit), sort.by = "none") %>%
+    rownames_to_column("Protein.Group") %>%
+    mutate(Channel = channel_name)
+})
+
+# 4. CUTOFF CALCULATION
+
+# Calculate the dynamic cutoff (Median Absolute Deviation)
+cutoff_stats <- limma_results %>%
+  mutate(direction = ifelse(logFC > 0, "Up", "Down")) %>%
+  group_by(Channel, direction) %>%
+  summarise(
+    mad_val = 5 * mad(abs(logFC), center = median(abs(logFC))),
+    .groups = "drop"
+  )
+
+final_cutoff <- round(mean(cutoff_stats$mad_val),2)
+cat("Dynamic Cutoff calculated: +/- ", round(final_cutoff, 3), "\n")
+
+# Assign Regulation
+limma_results <- limma_results %>%
+  mutate(
+    Regulation = case_when(
+      logFC > final_cutoff  & adj.P.Val <= 0.01 ~ "Up",
+      logFC < -final_cutoff & adj.P.Val <= 0.01 ~ "Down",
+      TRUE ~ "Unchanged"
+    )
+  )
+
+# 5. ADD PROTEIN METADATA
+protein_meta <- data %>%
+  select(Protein.Group, Genes, Protein.Names) %>%
+  distinct() 
+
+limma_results <- limma_results %>%
+  left_join(protein_meta, by = "Protein.Group") %>%
+  relocate(Genes, Protein.Names, .after = Protein.Group)
+
+# 6. SAVE DATA
+output_file <- here("results", "SILAC_proteome", "Prot_30spd_4patients_6h", "SILAC_Prot_30spd_4patients_6h_Limma_results.tsv")
+write_tsv(limma_results, output_file)
+```
+
+## 4. Count significantly regulated proteins
+```{r count}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 6
+
+# 1. Count
+count <- limma_results %>%
+  group_by(Channel, Regulation) %>%
+  summarise(n = n()) %>%
+  ungroup()
+
+# 2. Bar Plot
+ggplot(count %>% filter(Regulation != "Unchanged"), aes(x = Channel, y = n, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(palette = "Set1", direction = -1) +
+  geom_text(aes(label = n), position = position_dodge(width = 1), vjust = -0.5) +
+  xlab("Contrast") +
+  ylab("Number of regulated proteins") +
+  theme_minimal(base_size = 12) +
+  ggtitle("Regulated proteins adj.p <= 0.01 & fc cutoff: SILAC Proteome 4 patients, 30 spd 6h") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## 5. Density plot of logfc
+```{r density-plot}
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 5
+
+ggplot(limma_results, aes(x = logFC, fill = Channel)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = c(-0.35, 0.35), linetype = "dashed") +
+  
+  # Split into 3 panels
+  facet_wrap(~Channel, labeller = label_both) + 
+  
+  # Manual colors to match your original code
+  scale_fill_manual(values = c("H" = "red", "L" = "blue", "M" = "yellow")) +
+  
+  labs(
+    title = "LogFC Distribution per Channel (6h)",
+    x = "Log2 FC Co-Culture vs Ctrl"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+## 6. Visualize differential protein Degradation (Euler)
+```{r euler}
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 8
+
+# 1. Create ID lists
+lists <- list(
+  L_up   = limma_results$Protein.Group[limma_results$Channel == "L" & limma_results$Regulation == "Up"],
+  L_down = limma_results$Protein.Group[limma_results$Channel == "L" & limma_results$Regulation == "Down"],
+  H_up   = limma_results$Protein.Group[limma_results$Channel == "H" & limma_results$Regulation == "Up"],
+  H_down = limma_results$Protein.Group[limma_results$Channel == "H" & limma_results$Regulation == "Down"],
+  M_up   = limma_results$Protein.Group[limma_results$Channel == "M" & limma_results$P.Value <= 0.05 & limma_results$logFC > 0],
+  M_down = limma_results$Protein.Group[limma_results$Channel == "M" & limma_results$P.Value <= 0.05 & limma_results$logFC < 0]
+)
+
+# 2. Plotting Function
+make_euler <- function(keys, title) {
+  plot(
+    euler(lists[keys]),
+    quantities = TRUE,           # Keep numbers inside
+    labels = FALSE,              # Remove text from inside
+    legend = list(side = "right"), # Add text to the side
+    fills = c("lightblue", "lightpink", "lightgreen", "lightyellow"),
+    main = title
+  )
+}
+
+# 3. Generate Plots
+make_euler(c("L_up", "L_down", "M_up", "M_down"), "Regulated proteins 6h L vs M")
+make_euler(c("H_up", "H_down", "M_up", "M_down"), "Regulated proteins 6h H vs M")
+```
+
+## 7. Save Differential Protein Degradation Candidates
+```{r heatmap}
+#| message: false
+#| warning: false
+
+# 1. Load Presence/Absence Data
+input_folder <- here("results", "SILAC_proteome")
+absence  <- fread(file.path(input_folder, "absence_medium.txt"))$Protein.Group
+presence <- fread(file.path(input_folder, "presence_medium.txt"))$Protein.Group
+
+# 2. Identify Candidates
+exclude_down <- union(lists$M_down, absence) # For Degradation (Down)
+exclude_up   <- union(lists$M_up,   presence)# For Stabilization (Up)
+targets <- list(
+  H_deg  = list(base = lists$H_down, exclude = exclude_down),
+  H_stab = list(base = lists$H_up, exclude = exclude_up),
+  L_deg  = list(base = lists$L_down, exclude = exclude_down),
+  L_stab = list(base = lists$L_up, exclude = exclude_up)
+)
+
+# 3. Loop to calculate differences and save files
+output_folder <- here("results", "SILAC_proteome", "Prot_30spd_4patients_6h", "Protein_degradation")
+target_ids <- map(names(targets), function(name) {
+  t <- targets[[name]]
+  ids <- setdiff(t$base, t$exclude)
+  # Save
+  limma_results %>% 
+    filter(Protein.Group %in% ids) %>%
+    write.table(
+      file = file.path(output_folder, paste0("Protein_degradation_", name, "_6h.tsv")),
+      sep = "\t", row.names = FALSE, quote = FALSE
+    )
+  return(ids)
+})
+```
+
+
+
+
+
+
+

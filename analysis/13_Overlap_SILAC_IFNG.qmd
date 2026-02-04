@@ -1,0 +1,212 @@
+---
+title: "Overlap between proteins regulated by T cell attack and IFNG"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and Libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(data.table)
+library(tidyverse)
+library(here)
+library(RColorBrewer)
+library(ggrepel)
+library(readr)
+library(eulerr)
+```
+
+## 2. Load Data & Find Overlap
+```{r overlap_analysis}
+#| message: false
+#| warning: false
+#| fig-cap: "Euler Plot of the Overlap between proteins regulated by T cell attack (SILAC) and IFNG treatment."
+#| fig-width: 8
+#| fig-height: 6
+
+# 1. Batch Load Files using 'here'
+# Map variable names (left) to filenames (right)
+file_map <- c(
+  silac       = "results/SILAC_proteome/Prot_30spd_4patients_6h/PG.MaxLFQ_matrix_Prot_30spd_4patients_6h.tsv",
+  ifng        = "results/IFNG/IFNG_log2_data.tsv",
+  silac_limma = "results/SILAC_proteome/Prot_30spd_4patients_6h/SILAC_Prot_30spd_4patients_6h_Limma_results.tsv",
+  ifng_limma  = "results/IFNG/Limma_IFNG.txt",
+  silac_pres  = "results/SILAC_proteome/presence_medium.txt",
+  silac_abs   = "results/SILAC_proteome/absence_medium.txt",
+  ifng_pa     = "results/IFNG/Presence.Absence.txt"
+)
+
+# Load all files at once into the global environment
+# We use here() to safely locate files relative to project root
+list2env(
+  lapply(file_map, function(f) as.data.frame(fread(here(f)))), 
+  envir = .GlobalEnv
+)
+
+# 2. Define Universes (Backgrounds)
+silac_m_genes <- unique(silac[silac$Channel == "M", "Protein.Group"])
+ifng_genes    <- unique(ifng$Protein.Group)
+
+# 3. Define Sets for Euler
+get_ids <- function(df, criteria, universe) {
+  df %>% filter(eval(criteria)) %>% pull(Protein.Group) %>% intersect(universe)
+}
+
+sets <- list(
+  # SILAC Sets (Filtered by IFNg universe)
+  silac_up       = get_ids(silac_limma, quote(Regulation == "Up" & Channel == "M"), ifng_genes),
+  silac_down     = get_ids(silac_limma, quote(Regulation == "Down" & Channel == "M"), ifng_genes),
+  silac_presence = get_ids(silac_pres,  quote(TRUE), ifng_genes),
+  silac_absence  = get_ids(silac_abs,   quote(TRUE), ifng_genes),
+  
+  # IFNg Sets (Filtered by SILAC M universe)
+  ifng_up_6h     = get_ids(ifng_limma, quote(regulated == "up" & tp == "6h"), silac_m_genes),
+  ifng_down_6h   = get_ids(ifng_limma, quote(regulated == "down" & tp == "6h"), silac_m_genes),
+  ifng_up_24h    = get_ids(ifng_limma, quote(regulated == "up" & tp == "24h"), silac_m_genes),
+  ifng_down_24h  = get_ids(ifng_limma, quote(regulated == "down" & tp == "24h"), silac_m_genes),
+  ifng_presence  = get_ids(ifng_pa,    quote(presence == "yes"), silac_m_genes),
+  ifng_absence   = get_ids(ifng_pa,    quote(absence == "yes"), silac_m_genes)
+)
+
+plot(euler(sets), quantities = TRUE)
+
+# 4. Generate Overlap Data (Positive Regulation)
+# Union of all "Positive" signals for SILAC and IFNg
+pos_silac <- union(sets$silac_up, sets$silac_presence)
+pos_ifng  <- union(sets$ifng_up_6h, union(sets$ifng_up_24h, sets$ifng_presence))
+
+# Find Intersection
+overlap_ids <- intersect(pos_silac, pos_ifng)
+
+# Create Master Gene Map
+gene_map <- bind_rows(
+  silac %>% select(Protein.Group, Genes),
+  ifng  %>% select(Protein.Group, Genes)
+) %>%
+  distinct(Protein.Group, .keep_all = TRUE)
+
+# Merge Data
+final_df <- data.frame(Protein.Group = overlap_ids) %>%
+  
+  # 1. Attach Gene Names from the Master Map
+  left_join(gene_map, by = "Protein.Group") %>%
+  
+  # 2. Attach SILAC Data
+  left_join(
+    silac_limma %>% 
+      filter(Channel == "M") %>% 
+      select(Protein.Group, SILAC_logFC = logFC), 
+    by = "Protein.Group"
+  ) %>%
+  
+  # 3. Attach IFNG 6h Data
+  left_join(
+    ifng_limma %>% 
+      filter(tp == "6h") %>% 
+      select(Protein.Group, IFNG_logFC_6h = logFC), 
+    by = "Protein.Group"
+  ) %>%
+  
+  # 4. Attach IFNG 24h Data
+  left_join(
+    ifng_limma %>% 
+      filter(tp == "24h") %>% 
+      select(Protein.Group, IFNG_logFC_24h = logFC), 
+    by = "Protein.Group"
+  )
+#These proteins are represented in the STRING network (Figure 3C)
+
+# Export
+write.table(final_df, here("results", "IFNG", "overlap_silac_up_IFNG.txt"), sep = "\t", row.names = FALSE)
+```
+
+## 3. Scatter Plot
+```{r scatter_plot}
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 8
+
+# 1. Prepare Reference Data (SILAC)
+# Clean it once: lowercase regulation, rename columns
+clean_silac <- silac_limma %>%
+  filter(Channel == "M") %>%
+  select(Protein.Group, Genes, logFC_SILAC = logFC, reg_SILAC = Regulation) %>%
+  mutate(
+    reg_SILAC = tolower(reg_SILAC),
+    reg_SILAC = factor(reg_SILAC, levels = c("down", "unchanged", "up"))
+  )
+
+# 2. Function to Process & Plot per Timepoint
+generate_scatter <- function(timepoint) {
+  
+  # A. Filter & Join IFNG Data
+  df <- ifng_limma %>%
+    filter(tp == timepoint) %>%
+    select(Protein.Group, Genes, logFC_IFNG = logFC, reg_IFNG = regulated) %>%
+    na.omit() %>%
+    mutate(reg_IFNG = factor(reg_IFNG, levels = c("down", "unchanged", "up"))) %>%
+    inner_join(clean_silac, by = c("Protein.Group", "Genes"))
+  
+  # B. Calculate Statistics (R-squared)
+  fit <- lm(logFC_SILAC ~ logFC_IFNG, data = df)
+  r2  <- summary(fit)$r.squared
+  
+  # C. Identify Labels
+  # Logic: Label only if BOTH are regulated (Shared)
+  df <- df %>%
+    mutate(
+      shared_status = case_when(
+        reg_IFNG == "down" & reg_SILAC == "down" ~ "Downregulated",
+        reg_IFNG == "up"   & reg_SILAC == "up"   ~ "Upregulated",
+        TRUE ~ "Unchanged"
+      )
+    )
+  
+  # Select Top 20 most changing proteins for labeling
+  top_labels <- df %>%
+    filter(shared_status != "Unchanged") %>%
+    mutate(magnitude = abs(logFC_IFNG) + abs(logFC_SILAC)) %>%
+    arrange(desc(magnitude)) %>%
+    slice_head(n = 20)
+  
+  # D. Plot
+  p <- ggplot(df, aes(x = logFC_IFNG, y = logFC_SILAC)) +
+    geom_point(aes(color = reg_IFNG, shape = reg_SILAC), size = 3, alpha = 0.8) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+    geom_text_repel(
+      data = top_labels,
+      aes(label = Genes),
+      size = 3, color = "black", box.padding = 0.5, max.overlaps = Inf
+    ) +
+    scale_color_manual(values = c("down" = "blue", "unchanged" = "grey", "up" = "red")) +
+    scale_shape_manual(values = c("down" = 16, "unchanged" = 18, "up" = 17)) +
+    theme_minimal(base_size = 14) +
+    labs(
+      title = paste0(timepoint, " (R2 = ", round(r2, 3), ")"),
+      x = paste0("IFNG logFC ", timepoint),
+      y = "SILAC logFC (M)",
+      color = "IFNG Reg.",
+      shape = "SILAC Reg."
+    )
+  
+  return(p)
+}
+
+# 3. Generate Plots
+plots <- map(c("6h", "24h"), generate_scatter)
+
+# 4. Display
+plots[[1]] # 6h Plot
+plots[[2]] # 24h Plot
+```
+
+

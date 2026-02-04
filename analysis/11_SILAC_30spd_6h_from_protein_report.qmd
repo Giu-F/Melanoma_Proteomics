@@ -1,0 +1,345 @@
+---
+title: "SILAC Proteome (4 patients, 30 spd) from Protein Report: 6 h"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(here)
+library(RColorBrewer)
+library(pheatmap)
+```
+
+## 2. Load the data and log2 transform
+```{r load-data}
+#| message: false
+#| warning: false
+
+# 1. Load data
+input_file <- here("results", "SILAC_proteome", "Prot_30spd_4patients_6h", "PG.MaxLFQ_long_Prot_30spd_4patients_6h.tsv")
+data <- fread(input_file)
+data <- as.data.frame(data)
+
+# 2. Log2 transform data
+data <- data %>% mutate(PG.MaxLFQ = log2(PG.MaxLFQ))
+
+# 3. Replace P605_Co_6h_4_2 with P605_Co_6h_4
+data$Run <- gsub("P605_Co_6h_4_2", "P605_Co_6h_4", data$Run)
+```
+
+## 3. Normalization Check
+```{r normalization-check}
+#| message: false
+#| warning: false
+#| fig-height: 6
+#| fig-width: 10
+
+# 1. Prepare data for Boxplot
+data$group <- factor(data$group, levels = c("Control", "Co-culture"))
+data <- data[order(data$patient, data$group, data$Run),]
+data$Run <- factor(data$Run, levels = unique(data$Run))
+
+# 2. Plot Boxplot
+ggplot(data, aes(x = Run, y = PG.MaxLFQ, fill = group, color = patient)) +
+  geom_boxplot(lwd = 0.1, outlier.size = 0.1) +
+  scale_fill_brewer(palette = "Set3") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(
+    angle = 90,
+    vjust = 1,
+    hjust = 1
+  )) +
+  xlab("MS run") +
+  ylab("Log2 MS signal") +
+  ggtitle("Boxplot of Log2 MS intensities: Proteome 30 spd 4 patients 6h")
+
+# 3. By channel
+ggplot(data, aes(x = Run, y = PG.MaxLFQ, fill = group, colour = patient)) +
+  geom_boxplot(lwd = 0.1, outlier.size = 0.1) +
+  scale_fill_brewer(palette = "Set3") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(
+    angle = 90,
+    vjust = 1,
+    hjust = 1
+  )) +
+  xlab("MS run") +
+  ylab("Log2 MS signal") +
+  ggtitle("Boxplot of Log2 MS intensities by Channel: Proteome 30 spd 4 patients 6h") +
+  facet_wrap(~ Channel, nrow = 3)
+
+# 4. Density plot by channel
+ggplot(data, aes(x = PG.MaxLFQ)) + 
+  geom_density(aes(color = group)) +
+  facet_wrap(~Channel, labeller = label_both) +
+  scale_color_brewer(palette = "Set1", direction = -1) +
+  theme_minimal(base_size = 12) +
+  xlab("Log2 MS signal") +
+  ggtitle("Density distribution of Log2 MS intensities by Channel: Proteome 30 spd 4 patients 6h")
+
+# 5. Density plot by channel and patient
+ggplot(data, aes(x = PG.MaxLFQ)) + 
+  geom_density(aes(color = group)) +
+  facet_grid(rows = vars(Channel), cols = vars(patient), labeller = label_both) +
+  scale_color_brewer(palette = "Set1", direction = -1) +
+  theme_minimal(base_size = 12) +
+  xlab("Log2 MS signal") +
+  ggtitle("Density distribution of Log2 MS intensities by Channel and Patient: Proteome 30 spd 4 patients 6h")
+```
+
+## 4. Heatmaps of Relative Intensity (Centered)
+```{r heatmaps}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+#| results: "asis"
+
+# 1. Scale the data (Centering only)
+# Note: scale = FALSE means we subtract Mean but don't divide by SD
+data_scaled <- data %>%
+  group_by(Protein.Group, Channel) %>%
+  mutate(PG.MaxLFQ = scale(PG.MaxLFQ, scale = FALSE)) %>%
+  ungroup()
+
+# 2. Define Loop Settings 
+channels <- c("H", "L", "M")
+
+# Loop through each channel
+for (ch in channels) {
+  
+  message(paste("--> Generating heatmap for Channel:", ch))
+  
+  # A. Prepare Matrix (Filter & Pivot)
+  wide_matrix <- data_scaled %>%
+    filter(Channel == ch) %>%
+    select(Protein.Group, Run, PG.MaxLFQ) %>%
+    pivot_wider(names_from = Run, values_from = PG.MaxLFQ) %>%
+    column_to_rownames(var = "Protein.Group")
+  
+  # B. Filter NAs (Keep rows with < 50% missing values)
+  wide_matrix <- wide_matrix[rowSums(is.na(wide_matrix)) < ncol(wide_matrix)/2, ]
+  
+  # C. Create Annotations
+  # Extract group and patient info from column names
+  group   <- ifelse(grepl("Co", colnames(wide_matrix), fixed = TRUE), "Co-culture", "Control")
+  patient <- sub("_.*", "", colnames(wide_matrix))
+  
+  annotation_df <- data.frame(
+    Group = group, 
+    Patient = patient
+  )
+  rownames(annotation_df) <- colnames(wide_matrix)
+  
+  # D. Calculate Dynamic Breaks
+  abs_values <- abs(as.matrix(wide_matrix))
+  limit <- quantile(abs_values, 0.99, na.rm = TRUE)
+  
+  # Round it to a nice number
+  limit <- ceiling(limit)
+  
+  # Force a minimum limit
+  limit <- max(limit, 2)
+  
+  breaks_dynamic <- seq(-limit, limit, length.out = 101)
+  
+  # E. Render Plot
+  pheatmap(
+    wide_matrix,
+    color = colorRampPalette(rev(brewer.pal(n = 11, name = "RdBu")))(100),
+    breaks = breaks_dynamic,
+    cluster_cols = TRUE,
+    cluster_rows = TRUE,
+    show_rownames = FALSE,
+    angle_col = 90,
+    annotation_col = annotation_df,
+    main = paste("Heatmap of Relative Intensities (Centered): Channel", ch)
+  )
+}
+```
+
+## 5. Correlation heatmap
+```{r correlation-heatmap}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+#| results: "asis"
+
+# 1. Prepare correlation matrix
+matrix_wide <- data %>%
+  mutate(sample = paste0(Run, "_", Channel)) %>%
+  select(Protein.Group, sample, PG.MaxLFQ) %>%
+  pivot_wider(names_from = sample, values_from = PG.MaxLFQ) %>%
+  column_to_rownames(var = "Protein.Group")
+
+cor_matrix <- cor(matrix_wide, use = "pairwise.complete.obs")
+
+# 2. Create annotations
+# Extract group and patient info from column names
+group   <- ifelse(grepl("Co", colnames(matrix_wide), fixed = TRUE), "Co-culture", "Control")
+patient <- sub("_.*", "", colnames(matrix_wide))
+channel <- sub(".*_(.)$", "\\1", colnames(matrix_wide))
+
+annotation_df <- data.frame(Group = group, Patient = patient, Channel = channel)
+rownames(annotation_df) <- colnames(matrix_wide)
+
+# 3. Render Plot
+pheatmap(
+  cor_matrix, 
+  color = colorRampPalette(brewer.pal(n = 7, name = "YlOrBr"))(100),
+  annotation_col = annotation_df,
+  annotation_row = annotation_df,
+  main = "Correlation Heatmap: Proteome 30 spd 4 patients 6h", 
+  show_rownames = F,
+  show_colnames = F
+)
+```
+
+## 6. Heatmap of Protein Degradation Candidates
+```{r degradation-heatmap}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Load the Candidate Files
+input_dir <- here("results", "SILAC_proteome", "Prot_30spd_4patients_6h", "Protein_degradation")
+H_deg_ids  <- fread(file.path(input_dir, "Protein_degradation_H_deg_6h.tsv"))$Protein.Group
+H_stab_ids <- fread(file.path(input_dir, "Protein_degradation_H_stab_6h.tsv"))$Protein.Group
+L_deg_ids  <- fread(file.path(input_dir, "Protein_degradation_L_deg_6h.tsv"))$Protein.Group
+L_stab_ids <- fread(file.path(input_dir, "Protein_degradation_L_stab_6h.tsv"))$Protein.Group
+
+# Combine for plotting
+ids_H_all <- c(H_deg_ids, H_stab_ids)
+ids_L_all <- c(L_deg_ids, L_stab_ids)
+
+# 2. Prepare Data (Scale & Summarize)
+heatmap_data <- data %>%
+  group_by(Protein.Group, Genes, Channel, patient) %>%
+  mutate(z = scale(PG.MaxLFQ)) %>% 
+  group_by(Protein.Group, Genes, Channel, patient, group) %>%
+  summarise(mean = mean(z, na.rm = TRUE), .groups = "drop") %>%
+  mutate(variable = paste0(patient, "_", group))
+
+# 3. Plotting Function --------------------------------------------------
+plot_degradation <- function(ch, ids_to_plot, title) {
+  
+  # A. Filter and Pivot
+  mat_wide <- heatmap_data %>%
+    filter(Channel == ch, Protein.Group %in% ids_to_plot) %>%
+    select(Genes, variable, mean) %>%
+    distinct(Genes, variable, .keep_all = TRUE) %>% 
+    pivot_wider(names_from = variable, values_from = mean) %>%
+    column_to_rownames("Genes") %>%
+    select(contains("Control"), contains("Co-")) 
+  
+  # B. Annotations
+  cols <- data.frame(
+    Group = ifelse(grepl("Co-", colnames(mat_wide)), "Co-culture", "Control"),
+    Patient = sub("_.*", "", colnames(mat_wide))
+  )
+  rownames(cols) <- colnames(mat_wide)
+  
+  # C. Plot
+  pheatmap(
+    mat_wide,
+    color = colorRampPalette(rev(brewer.pal(11, "RdBu")))(100),
+    breaks = seq(-1.5, 1.5, length.out = 101),
+    cluster_cols = FALSE,
+    cluster_rows = TRUE,
+    angle_col = 90,
+    annotation_col = cols,
+    main = title
+  )
+}
+
+# 4. Generate Plots -----------------------------------------------------
+if(length(ids_H_all) > 0) {
+  plot_degradation("H", ids_H_all, "Heavy Channel: Degradation & Stab.")
+} else { message("No candidates found for Heavy Channel") }
+
+if(length(ids_L_all) > 0) {
+  plot_degradation("L", ids_L_all, "Light Channel: Degradation & Stab.")
+} else { message("No candidates found for Light Channel") }
+```
+
+## 7. Heatmap of Top 50 Up-regulated in M
+```{r top50-upregulated-M}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Load Limma Data & Identify Top 50 Targets
+limma_file <- here("results", "SILAC_proteome", "Prot_30spd_4patients_6h", "SILAC_Prot_30spd_4patients_6h_Limma_results.tsv")
+limma <- fread(limma_file) %>% as.data.frame()
+top_genes <- limma %>%
+  filter(Channel == "M", Regulation == "Up") %>%
+  arrange(adj.P.Val) %>%
+  slice_head(n = 50) %>%
+  pull(Protein.Group)
+
+# 2. Calculate Global Minimum for Imputation
+min_val <- data %>%
+  filter(Channel == "M", Protein.Group %in% top_genes) %>%
+  summarise(m = min(PG.MaxLFQ, na.rm = TRUE)) %>%
+  pull(m)
+
+# 3. Process Data
+mat_M <- data %>%
+  ungroup() %>%
+  # A. Filter for target proteins in M channel
+  filter(Channel == "M", Protein.Group %in% top_genes) %>%
+  select(Genes, Run, PG.MaxLFQ, group, patient) %>%
+  
+  # B. Complete with Nesting
+  complete(
+    nesting(Genes), 
+    nesting(Run, patient, group)
+  ) %>% 
+  
+  # C. Impute NAs
+  mutate(PG.MaxLFQ = replace_na(PG.MaxLFQ, min_val)) %>%
+  
+  # D. Scale: Center within Patient (Remove patient baseline)
+  group_by(Genes, patient) %>%
+  mutate(z = scale(PG.MaxLFQ, center = TRUE, scale = FALSE)) %>%
+  
+  # E. Summarize & Format for Heatmap
+  group_by(Genes, patient, group) %>%
+  summarise(mean_z = mean(z, na.rm = TRUE), .groups = "drop") %>%
+  mutate(variable = paste0(patient, "_", group)) %>%
+  select(Genes, variable, mean_z) %>%
+  pivot_wider(names_from = variable, values_from = mean_z) %>%
+  column_to_rownames("Genes") %>%
+  select(contains("Control"), contains("Co-"))
+
+# 3. Plot
+pheatmap(
+  mat_M,
+  color = colorRampPalette(rev(brewer.pal(11, "RdBu")))(100),
+  breaks = seq(-3, 3, length.out = 101),
+  cluster_cols = FALSE,
+  cluster_rows = TRUE,
+  show_rownames = TRUE,
+  angle_col = 90,
+  main = "Top 50 Up-regulated (Medium Channel)"
+)
+```
+
+

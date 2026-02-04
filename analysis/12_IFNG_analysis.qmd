@@ -1,0 +1,520 @@
+---
+title: "Proteomic profiling of melanoma cells (3 patients) stimulated with IFNG"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and Libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(data.table)
+library(tidyverse)
+library(limma)
+library(here)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+library(ggfortify)
+library(readr)
+library(eulerr)
+```
+
+## 2. Load Data
+```{r load-data}
+#| message: false
+#| warning: false
+
+# 1. Define the path to the data
+data_path <- here("data", "IFNG", "report.pg_matrix.tsv")
+
+# 2. Read the file
+raw_data <- fread(data_path)
+raw_data <- as.data.frame(raw_data)
+cat("Data dimensions:", dim(raw_data), "\n")
+```
+
+## 3. Data Cleaning
+```{r data-cleaning}
+#| message: false
+#| warning: false
+
+# 1. Filter Contaminants
+# Remove rows matching "cRAP" in the Protein column
+clean_data <- raw_data[!grepl("cRAP", raw_data$Protein.Group, fixed = TRUE), ]
+
+# 2. Remove rows where Gene.Names is empty
+clean_data <- clean_data[clean_data$Genes != "", ]
+
+# 3. Rename Columns
+#remove text after ".raw"
+colnames(clean_data) <- gsub(".mzML", "", colnames(clean_data))
+#remove text before "TCL" and replace with "T"
+colnames(clean_data) <- gsub(".*TCL_", "P9", colnames(clean_data))
+#remove "_9ul"
+colnames(clean_data) <- gsub("_9ul", "", colnames(clean_data))
+
+# 4. Keep only 6h and 24h
+clean_data <- clean_data %>% dplyr::select(1:4, contains("6h"), contains("24h"))
+
+# 5. Remove rows with all NA
+clean_data <- clean_data[!rowSums(is.na(clean_data[,5:ncol(clean_data)])) == ncol(clean_data[,5:ncol(clean_data)]),]
+
+# 6. Log2 Transformation
+logdata <- clean_data
+logdata[, 5:ncol(clean_data)] <- log2(logdata[, 5:ncol(clean_data)])
+
+# 7. Preview the cleaned data
+cat("Cleaned data dimensions:", dim(logdata), "\n")
+glimpse(logdata)
+
+# 8. Export data
+output_dir <- here("results", "IFNG")
+write_tsv(logdata, file.path(output_dir, "IFNG_log2_data.tsv"))
+```
+
+## 4. Euler Diagram of Identifications
+```{r euler-diagram}
+#| message: false
+#| warning: false
+#| fig-cap: "Euler Diagram of Phosphosite Identifications across Patients"
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Define Patient IDs
+patients <- c("P905", "P915", "P924")
+
+# 2. Extract Protein Lists Loop
+overlap <- map(patients, function(id) {
+  logdata %>%
+    select(Protein.Group, starts_with(id)) %>%
+    # Keep row if AT LEAST ONE value exists for this patient
+    filter(
+      rowSums(is.na(across(starts_with(id)))) != ncol(across(starts_with(id)))
+    ) %>%
+    pull(Protein.Group) %>%
+    unique()
+}) %>% set_names(patients)
+
+cat("Average number of identifications per patient:",
+    mean(sapply(overlap, length)),
+    "\n")
+
+# 3. Plot
+plot(
+  euler(overlap),
+  quantities = TRUE,
+  fills = c("pink", "lightblue", "yellow")
+)
+```
+
+## 5. Quality Control: Identification Rates
+```{r id-count}
+#| message: false
+#| warning: false
+#| fig-cap: "Number of identified phosphosites per condition (Mean +/- SD)"
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Count identified proteins per run
+id_counts <- as.data.frame(nrow(logdata) - colSums(is.na(logdata[,5:ncol(clean_data)])))
+id_counts$run <- rownames(id_counts)
+colnames(id_counts)[1] <- "Number_of_IDs"
+rownames(id_counts) <- NULL
+
+# 2. Add the group metadata column
+id_counts$group <- gsub("......$", "", id_counts$run) #remove last 6 characters
+
+cat("Overall mean number of IDs:", mean(id_counts$Number_of_IDs), "\n")
+
+# 3. Summarize by group (Mean and SD)
+id_summary <- id_counts %>% 
+  group_by(group) %>% 
+  summarise(
+    mean = mean(Number_of_IDs), 
+    sd = sd(Number_of_IDs),
+    .groups = 'drop'
+  )
+
+# 4. Extract experimental factors for plotting
+#keep the first 3 characters of group
+id_summary$TCL <- str_sub(id_summary$group, 1, 4)
+cat("Unique TCLs:", unique(id_summary$TCL), "\n")
+#if group contains "IFNg" write "IFNg" in treatment column
+id_summary$treatment <- ifelse(str_detect(id_summary$group, "IFNg"), "IFNg", "Ctrl")
+cat("Unique treatments:", unique(id_summary$treatment), "\n")
+id_summary$treatment <- factor(id_summary$treatment, levels = c("Ctrl", "IFNg"))
+#remove the first 9 characters of group
+id_summary$tp <- str_sub(id_summary$group, 11, nchar(id_summary$group))
+cat("Unique timepoints:", unique(id_summary$tp), "\n")
+id_summary$tp <- factor(id_summary$tp, levels = c("6h", "24h"))
+
+# 5. Plot
+ggplot(id_summary, aes(x = tp, y = mean, fill = treatment)) +
+  geom_bar(stat = "identity",
+           position = "dodge",
+           color = "black") +
+  geom_errorbar(aes(ymin = mean - sd, ymax = mean + sd),
+                width = 0.2,
+                position = position_dodge(0.9)) +
+  geom_text(
+    aes(label = round(mean)),
+    vjust = -2,
+    size = 3,
+    position = position_dodge(0.9)
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Time point", y = "Number of IDs", fill = "Treatment") +
+  scale_fill_manual(values = c("#386cb0", "#ffff99")) +
+  scale_y_continuous(limits = c(0, 8000), breaks = seq(0, 8000, 2000)) +
+  facet_wrap( ~ TCL)
+```
+
+## 6. Normalization Check
+```{r normalization-check}
+#| message: false
+#| warning: false
+#| fig-cap: "Distribution of Log2 Intensities across MS Runs"
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Convert to Long Format
+metadata_cols <- c("Protein.Group", "Protein.Names", "Genes", "First.Protein.Description")
+
+melt <- logdata %>%
+  pivot_longer(
+    cols = -all_of(metadata_cols), # Pivot everything EXCEPT metadata
+    names_to = "run",
+    values_to = "value"
+  ) %>%
+  filter(!is.na(value)) # Remove Missing Values
+
+# 2. Extract Experimental Factors
+
+#keep the first 3 characters of run
+melt$TCL <- str_sub(melt$run, 1, 4)
+cat("Unique TCLs:", unique(melt$TCL), "\n")
+
+#remove the first 5 characters of run
+melt$group <- str_sub(melt$run, 6, nchar(melt$run))
+cat("Unique groups:", unique(melt$group), "\n")
+
+#if run contains "IFNg" write "IFNg" in treatment column, otherwise write "Ctrl"
+melt$treatment <- ifelse(str_detect(melt$run, "IFNg"), "IFNg", "Ctrl")
+cat("Unique treatments:", unique(melt$treatment), "\n")
+melt$treatment <- factor(melt$treatment, levels = c("Ctrl", "IFNg"))
+
+#remove last 6 characters of run
+melt$tp <- gsub("......$", "", melt$run)
+#remove the first 9 characters of tp
+melt$tp <- str_sub(melt$tp, 11, nchar(melt$tp))
+cat("Unique timepoints:", unique(melt$tp), "\n")
+melt$tp <- factor(melt$tp, levels = c("6h","24h"))
+
+# 3. Order by treatment and tp
+melt <- melt[order(melt$treatment, melt$tp),]
+melt$group <- factor(melt$group, levels = unique(melt$group))
+
+# 4. Boxplot
+ggplot(melt, aes(x = group, y = value, fill = treatment)) +
+  geom_boxplot(outlier.shape = NA, color = "black", lwd = 0.2) +
+  theme_minimal(base_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Run", y = "Log2 transformed intensity", fill = "Treatment") +
+  scale_fill_manual(values = c("#386cb0", "#ffff99")) +
+  facet_wrap(~TCL)
+```
+
+## 7. Principal Component Analysis (PCA)
+```{r pca-analysis}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+
+# PCA per TCL -------------------------------------------------------------
+
+# 1. Define targets and their plot titles
+targets <- c(P905 = "P905", P915 = "P915", P924 = "P924")
+
+# 2. Loop to Process and Plot
+pca_plots <- map2(names(targets), targets, function(id, title) {
+  
+  # A. Select & Clean Data
+  nona <- logdata %>% 
+    select(starts_with(id)) %>% 
+    na.omit()
+  
+  # B. Prepare Metadata (Transpose first)
+  # We create a dataframe specifically for the plotting labels
+  plot_data <- as.data.frame(t(nona)) %>%
+    mutate(
+      run  = rownames(.),
+      repl = str_sub(run, -1),
+      # Replicating your specific substring logic for 'tp':
+      tp   = str_sub(gsub("......$", "", run), 11),
+      tp   = factor(tp, levels = c("6h", "24h")),
+      treatment = ifelse(grepl("IFNg", run), "IFNg", "Ctrl")
+    )
+  
+  # C. Run PCA
+  pca_res <- prcomp(t(nona), scale. = FALSE)
+  
+  # D. Generate Plot
+  autoplot(pca_res, data = plot_data, fill = 'treatment', shape = 'tp', size = 5, color = "black") +
+    scale_fill_manual(values = c("#386cb0", "#ffff99")) +
+    scale_shape_manual(values = c(21, 22, 23, 24)) +
+    theme_minimal(base_size = 14) +
+    ggtitle(title) +
+    guides(fill = guide_legend(override.aes = list(shape = 21)))
+})
+
+# 3. Display Plots
+# You can view them individually:
+pca_plots[[1]] # P906
+pca_plots[[2]] # P915
+pca_plots[[3]] # P924
+```
+
+## 8. Presence/Absence
+```{r presence-absence}
+#| message: false
+#| warning: false
+#| fig-cap: "Heatmap of Proteins Present in IFNg (Absent in Ctrl)"
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Define Logic & Calculate Candidates
+# Identify columns
+cols_ctrl <- grep("Ctrl", colnames(logdata))
+cols_ifng <- grep("IFNg", colnames(logdata))
+
+# Count valid values per condition
+n_ctrl <- rowSums(!is.na(logdata[, cols_ctrl]))
+n_ifng <- rowSums(!is.na(logdata[, cols_ifng]))
+
+# Apply thresholds: Presence (High IFNg/Low Ctrl) & Absence (High Ctrl/Low IFNg)
+logdata$presence <- ifelse(n_ifng >= 7 & n_ctrl <= 2, "yes", "no")
+logdata$absence  <- ifelse(n_ctrl >= 7 & n_ifng <= 2, "yes", "no")
+
+cat("Number of Presence candidates:", sum(logdata$presence == "yes"), "\n")
+cat("Number of Absence candidates:", sum(logdata$absence == "yes"), "\n")
+
+# Save Combined List
+output_dir <- here("results", "IFNG")
+write.table(
+  logdata[logdata$presence == "yes" | logdata$absence == "yes", ], 
+  file.path(output_dir, "Presence.Absence.txt"), sep = "\t", row.names = FALSE
+)
+
+# 2. Prepare Heatmap Data (Presence Only)
+# Filter for presence candidates & select relevant numerical columns
+hm_data <- logdata[logdata$presence == "yes", c(1:4, cols_ctrl, cols_ifng)]
+
+# Convert to Matrix
+mat <- as.matrix(hm_data[, -(1:4)])
+rownames(mat) <- hm_data$Genes
+
+# Impute missing values to background noise (5)
+mat[is.na(mat)] <- 5
+
+# 3. Annotations
+# Extract metadata directly from column names
+anno_col <- data.frame(
+  Group   = ifelse(grepl("IFNg", colnames(mat)), "IFNG", "Control"),
+  Patient = sub("_.*", "", colnames(mat)),
+  Time    = str_sub(gsub("......$", "", colnames(mat)), 11),
+  row.names = colnames(mat)
+)
+
+# 4. Plot
+pheatmap(
+  mat,
+  color = colorRampPalette(brewer.pal(9, "Blues"))(50),
+  breaks = seq(min(mat), max(mat), length.out = 51),
+  cluster_cols = FALSE,
+  cluster_rows = TRUE,
+  annotation_col = anno_col,
+  show_rownames = TRUE,
+  fontsize_row = 6,
+  fontsize_col = 7,
+  angle_col = 90
+)
+
+# 5. Remove Presence/Absence columns from logdata
+logdata <- logdata %>% select(-presence, -absence)
+```
+
+## 8. Differential Expression Analysis with Limma
+```{r limma-analysis}
+#| message: false
+#| warning: false
+#| fig-cap: "Count of Significantly Regulated Proteins upon IFNg Stimulation"
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Filtering
+# A. Filter by Patient Consistency (>=2 valid values in 3 patients)
+patients <- c("P905", "P915", "P924")
+valid_per_patient <- sapply(patients, function(id) {
+rowSums(!is.na(logdata[, grep(id, colnames(logdata))])) >= 2
+})
+logdata_f <- logdata[rowSums(valid_per_patient) == 3, ]
+
+# B. Filter by Group Consistency (>=3 valid in matched pairs)
+# Define indices for speed
+idx <- list(
+c6 = grep("Ctrl_6h", colnames(logdata_f)),
+i6 = grep("IFNg_6h", colnames(logdata_f)),
+c24 = grep("Ctrl_24h", colnames(logdata_f)),
+i24 = grep("IFNg_24h", colnames(logdata_f))
+)
+
+# Keep if (6h Pair is valid) OR (24h Pair is valid)
+keep_condition <- (rowSums(!is.na(logdata_f[, idx$c6])) >= 3 &
+rowSums(!is.na(logdata_f[, idx$i6])) >= 3) |
+(rowSums(!is.na(logdata_f[, idx$c24])) >= 3 &
+rowSums(!is.na(logdata_f[, idx$i24])) >= 3)
+logdata_f <- logdata_f[keep_condition, ]
+rownames(logdata_f) <- logdata_f$Protein.Group
+
+# 2. Design & Modeling
+# Extract Metadata from column names (cols 5 to end)
+q_cols <- colnames(logdata_f)[5:ncol(logdata_f)]
+targets <- data.frame(
+ID = q_cols,
+TCL = str_sub(q_cols, 1, 4),
+Treatment = ifelse(str_detect(q_cols, "IFNg"), "IFNg", "Ctrl"),
+Time = str_sub(gsub("......$", "", q_cols), 11)
+) %>%
+mutate(Group = paste(Treatment, Time, sep = "_")) %>%
+mutate(Group = factor(Group, levels = c("Ctrl_6h", "Ctrl_24h", "IFNg_6h", "IFNg_24h"))
+)
+
+# Remove metadata columns from logdata_f
+meta_cols <- logdata_f[, 1:4]
+logdata_f <- logdata_f[,-(1:4)]
+
+# Limma Setup
+design <- model.matrix(~ 0 + Group, data = targets)
+colnames(design) <- gsub("Group", "", colnames(design))
+
+# Correlate blocks (Patients)
+corfit <- duplicateCorrelation(logdata_f[, q_cols], design, block = targets$TCL)
+fit <- lmFit(logdata_f[, q_cols], design, block = targets$TCL, correlation = corfit$consensus.correlation)
+
+# Contrasts
+contrast.matrix <- makeContrasts(
+  IFNg_Ctrl_6h = IFNg_6h - Ctrl_6h,
+  IFNg_Ctrl_24h = IFNg_24h - Ctrl_24h,
+  levels = design
+)
+fit2 <- contrasts.fit(fit, contrast.matrix)
+fit3 <- eBayes(fit2, trend = TRUE)
+
+# 3. Extract & Process Results
+df_limma <- map_dfr(colnames(contrast.matrix), function(coef_name) {
+  
+  res <- topTable(fit3, coef = coef_name, number = Inf, sort.by = "none")
+  
+  # Dynamic Cutoffs (Calculated per time point)
+  sd_up   <- 2 * sd(res$logFC[res$logFC > 0], na.rm = TRUE)
+  sd_down <- 2 * sd(res$logFC[res$logFC < 0], na.rm = TRUE)
+  cat("Time Point:", coef_name, "- SD Up:", sd_up, "SD Down: -", sd_down, "\n")
+  
+  res %>%
+    mutate(
+      Protein.Group = rownames(.),
+      tp = ifelse(grepl("6h", coef_name), "6h", "24h"),
+      regulated = case_when(
+        adj.P.Val <= 0.01 & logFC >= sd_up ~ "up",
+        adj.P.Val <= 0.01 & logFC <= -sd_down ~ "down",
+        TRUE ~ "unchanged"
+      )
+    )
+}) %>%
+  left_join(meta_cols, by = "Protein.Group")
+
+# 4. Save
+output_file <- here("results", "IFNG", "Limma_IFNG.txt")
+write.table(df_limma, output_file, sep = "\t", row.names = FALSE)
+
+# 5. Count regulated proteins
+count_limma <- df_limma %>%
+  group_by(tp, regulated) %>%
+  summarise(n = n_distinct(Protein.Group))
+count_limma$tp <- factor(count_limma$tp, levels = c("6h", "24h"))
+
+# 6. Plot regulated proteins
+ggplot(count_limma %>% filter(regulated != "unchanged"), aes(x = tp, y = n, fill = regulated)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = c("up" = "#ffff99", "down" = "#386cb0")) +
+  geom_text(aes(label = n), position = position_stack(vjust = 0.5), size = 3, color = "white") +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x = "Time point", y = "Number of regulated proteins", fill = "Regulation")
+```
+
+## 9. Heatmap Heatmaps of Relative Intensity (Centered) for regulated proteins
+```{r heatmap-limma}
+#| message: false
+#| warning: false
+#| fig-cap: "Heatmap of Significantly Regulated Proteins upon IFNg Stimulation"
+#| fig-height: 8
+#| fig-width: 10
+
+# 1. Select proteins to plot
+df_limma_reg <- df_limma %>% filter(regulated != "unchanged")
+
+# 2. Prepare data for heatmap
+hm <- melt %>%
+group_by(Protein.Group, TCL) %>%
+#center data
+mutate(z = scale(value, scale = F)) %>%
+ungroup() %>%
+#wide format
+select(-c("value", "TCL", "group", "treatment", "tp")) %>%
+spread(key = run, value = z) %>%
+filter(Protein.Group %in% df_limma_reg$Protein.Group) %>%
+column_to_rownames("Genes") %>%
+select(contains("Ctrl"), contains("IFNg")) %>%
+#keep rows with more than 50% values
+filter(rowSums(is.na(.)) < ncol(.) * 0.5)
+
+# 3. Annotate columns
+# Extract Metadata from column names (cols 5 to end)
+q_cols <- colnames(logdata)[5:ncol(logdata)]
+targets <- data.frame(
+ID = q_cols,
+TCL = str_sub(q_cols, 1, 4),
+Treatment = ifelse(str_detect(q_cols, "IFNg"), "IFNg", "Ctrl"),
+Time = str_sub(gsub("......$", "", q_cols), 11)
+) %>%
+mutate(Group = paste(Treatment, Time, sep = "_")) %>%
+mutate(Group = factor(Group, levels = c("Ctrl_6h", "Ctrl_24h", "IFNg_6h", "IFNg_24h"))
+)
+targets <- targets %>%
+#order by column names hm
+arrange(factor(ID, levels = colnames(hm))) %>%
+column_to_rownames("ID")
+
+# 4. Plot Heatmap
+breaks <- seq(-2, 2, length.out = 101)
+pheatmap(hm, 
+         breaks = breaks,
+         annotation_col = targets,
+         color = colorRampPalette(rev(brewer.pal(n=9, name ="RdBu")))(100),
+         show_rownames = F, 
+         fontsize_col = 7)
+```
+
+
+
