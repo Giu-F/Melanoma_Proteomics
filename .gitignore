@@ -7,20 +7,17 @@
 
 # --- Quarto & Knitr Cache ---
 *_files/
-analysis/*.html
 _freeze/
 _cache/
 /.quarto/
 
 # --- Large Data & Results ---
-data/EGF/report.phosphosites_90.tsv
-data/SILAC_Proteome/
-data/SILAC_Phos/report.parquet
-data/IFNG/
+data/
 results/EGF/
 results/SILAC_Proteome/
 results/SILAC_Phos/
 results/IFNG/
+results/CRISPR/
 
 # --- System files ---
 .DS_Store

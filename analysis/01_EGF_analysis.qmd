@@ -1,5 +1,5 @@
 ---
-title: "01) Phosphoproteomic profiling of SCC-25 cells stimulated with EGF and lysed immediately or after incubation on ice"
+title: "Phosphoproteomic profiling of SCC-25 cells stimulated with EGF and lysed immediately or after incubation on ice"
 author: "Giulia Franciosa"
 format: 
   html:
@@ -9,12 +9,11 @@ format:
     toc: true
 ---
 
-## 1. Setup and Libraries
+## 1. Load Libraries
 ```{r setup}
 #| message: false
 #| warning: false
 
-# 1. Load standard analysis libraries
 library(data.table)
 library(tidyverse)
 library(limma)
@@ -26,29 +25,25 @@ library(ggfortify)
 library(KEGGREST)
 library(viridis)
 library(gridExtra)
-
-# 2. Load our project's custom functions
-devtools::load_all() #to automatically load our custom functions from the `/R` folder
 ```
 
 ## 2. Load Data
 ```{r load-data}
 #| message: false
+#| warning: false
 
 # 1. Define the path to the data
 data_path <- here("data", "EGF", "report.phosphosites_90.tsv")
 
 # 2. Read the file
-raw_data <- fread(data_path)
-raw_data <- as.data.frame(raw_data)
-
-# 3. Quick look at the data structure
-glimpse(raw_data)
+raw_data <- fread(data_path) %>% as.data.frame(.)
+cat("Data dimensions:", dim(raw_data), "\n")
 ```
 
 ## 3. Data Cleaning
 ```{r data-cleaning}
 #| message: false
+#| warning: false
 
 # 1. Filter Contaminants
 # Remove rows matching "cRAP" in the Protein column
@@ -64,58 +59,27 @@ colnames(clean_data) <- sub("^.*IP_", "", colnames(clean_data))
 
 # 4. Log2 Transformation
 logdata <- clean_data
-logdata[, 7:30] <- log2(logdata[, 7:30])
+logdata[, 7:ncol(logdata)] <- log2(logdata[, 7:ncol(logdata)])
 
 # 5. Handle Infinite Values
 # Log2(0) produces -Inf, so we replace those with NA
 logdata[logdata == -Inf] <- NA
 
 # 6. Preview the cleaned data
-head(logdata)
+cat("Cleaned data dimensions:", dim(logdata), "\n")
+glimpse(logdata)
 ```
 
-## 4. Filter data
-```{r data-filtering}
-#| message: false
-#| warning: false
-
-# 1. Identify Column Indices for each group
-IL_DMSO <- which(grepl("IL_DMSO", colnames(logdata), fixed = TRUE))
-IL_EGF  <- which(grepl("IL_EGF",  colnames(logdata), fixed = TRUE))
-
-PBS_DMSO <- which(grepl("PBS_DMSO", colnames(logdata), fixed = TRUE))
-PBS_EGF  <- which(grepl("PBS_EGF",  colnames(logdata), fixed = TRUE))
-
-PI_DMSO <- which(grepl("PI_DMSO", colnames(logdata), fixed = TRUE))
-PI_EGF  <- which(grepl("PI_EGF",  colnames(logdata), fixed = TRUE))
-
-# 2. Keep rows where at least one group has >= 3 valid values (not NA)
-valid_rows <- (
-  rowSums(!is.na(logdata[, IL_DMSO])) >= 3 |
-  rowSums(!is.na(logdata[, IL_EGF]))  >= 3 |
-  rowSums(!is.na(logdata[, PBS_DMSO])) >= 3 |
-  rowSums(!is.na(logdata[, PBS_EGF]))  >= 3 |
-  rowSums(!is.na(logdata[, PI_DMSO])) >= 3 |
-  rowSums(!is.na(logdata[, PI_EGF]))  >= 3
-)
-
-# Apply the filter
-logdata_f <- logdata[valid_rows, ]
-
-# 3. Summary of Filtering
-cat("Original rows:", nrow(logdata), "\n")
-cat("Filtered rows:", nrow(logdata_f), "\n")
-cat("Removed", nrow(logdata) - nrow(logdata_f), "low-quality rows.\n")
-```
-
-## 5. Quality Control: Identification Rates
+## 4. Plot Identification Rates
 ```{r id-count}
 #| message: false
 #| warning: false
 #| fig-cap: "Number of identified phosphosites per condition (Mean +/- SD)"
+#| fig-height: 6
+#| fig-width: 8
 
 # 1. Count identified sites per run
-id_counts <- as.data.frame(nrow(logdata) - colSums(is.na(logdata[,7:30])))
+id_counts <- as.data.frame(nrow(logdata) - colSums(is.na(logdata[,7:ncol(logdata)])))
 colnames(id_counts)[1] <- "Number_of_IDs"
 
 # 2. Add metadata columns
@@ -164,18 +128,18 @@ ggplot(id_summary, aes(x = posttreatment, y = mean, fill = treatment)) +
   theme_minimal(base_size = 14)
 ```
 
-## 6. Normalization Check
+## 5. Normalization Check
 ```{r normalization-check}
 #| message: false
 #| warning: false
 #| fig-cap: "Distribution of Log2 Intensities across MS Runs"
 #| fig-height: 6
-#| fig-width: 10
+#| fig-width: 8
 
 # 1. Convert to Long Format
 metadata_cols <- c("Protein", "Protein.Names", "Gene.Names", "Residue", "Site", "Sequence")
 
-melt <- logdata_f %>%
+melt <- logdata %>%
   pivot_longer(
     cols = -all_of(metadata_cols), # Pivot everything EXCEPT metadata
     names_to = "variable",
@@ -203,27 +167,25 @@ ggplot(melt, aes(x = variable, y = value, fill = treatment, color = posttreatmen
     axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1)
   ) +
   xlab("MS Run") +
-  ylab("Log2 DiaNN normalized MS signal")
+  ylab("Log2 MS signal")
 ```
 
-## 7. Principal Component Analysis (PCA)
+## 6. Principal Component Analysis (PCA)
 ```{r pca-analysis}
 #| message: false
 #| warning: false
 #| fig-cap: "PCA Plot: Clustering of samples by Treatment and Condition"
+#| fig-height: 6
+#| fig-width: 8
 
 # 1. Prepare Data for PCA
 # PCA requires a complete dataset (no NAs)
-nona <- logdata_f %>%
+nona <- logdata %>%
   remove_rownames() %>% 
   mutate(site_id = paste0(Protein, "_", Residue, Site)) %>% 
   column_to_rownames(var = "site_id") %>% 
-  select(7:30) %>%
+  select(7:ncol(.)) %>%
   na.omit()
-
-# Print dimensions before removing NAs
-cat("Dimensions before removing NAs:", dim(logdata_f[,7:30]), "\n")
-# Print dimensions after removing NAs
 cat("Dimensions after removing NAs:", dim(nona), "\n")
 
 # Transpose
@@ -255,20 +217,52 @@ autoplot(pca, data = nonat_df, colour = 'treatment', shape = 'posttreatment', si
   labs(title = "Principal Component Analysis")
 ```
 
+## 7. Filter data
+```{r data-filtering}
+#| message: false
+#| warning: false
+
+# 1. Identify Column Indices for each group
+IL_DMSO <- which(grepl("IL_DMSO", colnames(logdata), fixed = TRUE))
+IL_EGF  <- which(grepl("IL_EGF",  colnames(logdata), fixed = TRUE))
+
+PBS_DMSO <- which(grepl("PBS_DMSO", colnames(logdata), fixed = TRUE))
+PBS_EGF  <- which(grepl("PBS_EGF",  colnames(logdata), fixed = TRUE))
+
+PI_DMSO <- which(grepl("PI_DMSO", colnames(logdata), fixed = TRUE))
+PI_EGF  <- which(grepl("PI_EGF",  colnames(logdata), fixed = TRUE))
+
+# 2. Keep rows where at least one group has >= 3 valid values (not NA)
+valid_rows <- (
+  rowSums(!is.na(logdata[, IL_DMSO])) >= 3 |
+  rowSums(!is.na(logdata[, IL_EGF]))  >= 3 |
+  rowSums(!is.na(logdata[, PBS_DMSO])) >= 3 |
+  rowSums(!is.na(logdata[, PBS_EGF]))  >= 3 |
+  rowSums(!is.na(logdata[, PI_DMSO])) >= 3 |
+  rowSums(!is.na(logdata[, PI_EGF]))  >= 3
+)
+
+# Apply the filter
+logdata_f <- logdata[valid_rows, ]
+
+# 3. Summary of Filtering
+cat("Filtered data dimensions:", dim(logdata_f), "\n")
+```
+
 ## 8. Differential Expression Analysis with Limma
 ```{r limma-analysis}
 #| message: false
 #| warning: false
 #| fig-cap: "Count of Significantly Regulated Phosphosites (FDR < 0.01, |FC| > 1)"
+#| fig-height: 6
+#| fig-width: 8
 
 # --- PART A: Limma Modeling ---
 
 # 1. Define Groups
-intensity_cols <- logdata_f[, 7:30]
+intensity_cols <- logdata_f[, 7:ncol(logdata)]
 group_names <- substr(colnames(intensity_cols), 1, nchar(colnames(intensity_cols)) - 2)
 group <- factor(group_names)
-
-# Print group levels
 cat("Defined groups:\n", paste(levels(group), collapse = ", "), "\n")
 
 # 2. Create Design Matrix
@@ -349,11 +343,12 @@ ggplot(count_summary %>% filter(regulated != "Unchanged"),
 # 1. Load KEGG Pathway Data
 # "hsa04012" is the KEGG ID for the ErbB signaling pathway in humans
 pathway_erbb2 <- keggGet("hsa04012")
+# The object returned by keggGet is a list
 
 # 2. Extract Gene Names
-# The object returned by keggGet is a list. 
 genes_raw <- pathway_erbb2[[1]]$GENE
 #The GENE component contains Entrez IDs (odd indices) and Gene Symbols/Descriptions (even indices)
+head(genes_raw)
 
 # Select only the Gene Symbols/Descriptions (even indices)
 descriptions_erbb2 <- genes_raw[seq(2, length(genes_raw), by = 2)]
@@ -370,7 +365,7 @@ cat("Extracted", length(gene_names_erbb2), "genes from the ErbB pathway.\n")
 
 # 3. Data Consistency Check
 # We check if our experimental data (limma_results) has multiple gene names separated by ";" in the Gene.Names column.
-has_semicolons <- any(grepl(";", limma_results$Gene.Names))
+any(grepl(";", limma_results$Gene.Names))
 ```
 
 ## 10. Volcano plots
@@ -384,6 +379,54 @@ has_semicolons <- any(grepl(";", limma_results$Gene.Names))
 # 1. Prepare IDs
 limma_results <- limma_results %>%
   mutate(id = paste0(Gene.Names, "_", Residue, Site))
+
+# 2. Create a function to plot volcano plots for each contrast
+plot_volcano <- function(limma_data, contrast_name, gene_list) {
+  # Filter data for the specific contrast
+  subset_data <- limma_data %>%
+    filter(contrast == contrast_name)
+  
+  # Highlight specific genes
+  kegg_hits <- subset_data %>%
+    filter(regulated != "Unchanged") %>%
+    filter(Gene.Names %in% gene_list)
+  
+  # Plot
+  ggplot(subset_data, aes(x = logFC, y = -log(adj.P.Val, 10))) +
+    geom_point(
+      aes(fill = regulated, alpha = regulated),
+      size = 2.5,
+      shape = 21,
+      color = "black"
+    ) +
+    scale_alpha_manual(values = c(
+      "Up-regulated" = 0.8,
+      "Down-regulated" = 0.8,
+      "Unchanged" = 0.2
+    )) +
+    scale_fill_manual(
+      values = c(
+        "Up-regulated" = "#e41a1c",
+        "Down-regulated" = "#377eb8",
+        "Unchanged" = "#4daf4a"
+      )
+    ) +
+    geom_text_repel(
+      data = kegg_hits,
+      aes(label = id),
+      max.overlaps = Inf,
+      size = 2,
+      box.padding = 0.4
+    ) +
+    geom_hline(
+      yintercept = -log10(0.01),
+      linetype = "dotted",
+      col = "black",
+      linewidth = 1
+    ) +
+    labs(x = "Log2FC EGF vs Ctrl", y = "-Log10 adjusted p", title = contrast_name) +
+    theme_minimal(base_size = 12)
+}
 
 # 2. Generate Plots
 
@@ -409,7 +452,6 @@ p_PI <- plot_volcano(
 )
 
 # 3. Display them together
-library(gridExtra)
 grid.arrange(p_IL, p_PBS, p_PI, ncol = 1)
 ```
 
@@ -417,8 +459,8 @@ grid.arrange(p_IL, p_PBS, p_PI, ncol = 1)
 ```{r heatmap-erbb}
 #| message: false
 #| warning: false
-#| fig-height: 10
-#| fig-width: 8
+#| fig-height: 8
+#| fig-width: 10
 #| fig-cap: "Heatmap of Regulated Phosphosites in the ErbB2 Pathway"
 
 # 1. Select Regulated Sites in the Pathway
@@ -426,11 +468,6 @@ erbb2_sites <- limma_results %>%
   mutate(id = paste0(Gene.Names, "_", Residue, Site)) %>%
   filter(Gene.Names %in% gene_names_erbb2) %>%
   filter(regulated != "Unchanged")
-
-# Check if we found any sites
-if (nrow(erbb2_sites) == 0) {
-  message("No regulated sites found in the ErbB2 pathway to plot.")
-} else {
 
 # 2. Prepare Data for Heatmap (Centering)
 meltz <- melt %>%
@@ -481,7 +518,6 @@ pheatmap(
   breaks = breaks,
   fontsize_row = 8
   )
-}
 ```
 
 ## 12. Inpur for PTMNavigator
@@ -490,7 +526,7 @@ pheatmap(
 #| warning: false
 
 # 1. Format Data for Export
-# We use 'limma_results' from step 8
+#We use 'limma_results' from step 8
 ptm_input <- limma_results %>%
   # Create signed log p-value (Direction comes from logFC, Magnitude from P.Value)
   mutate(`Log Fold Change` = ifelse(logFC > 0, -log(P.Value), log(P.Value))) %>%
@@ -528,7 +564,6 @@ for (i in contrasts_to_export) {
 ```
 
 ## 13. PTM-SEA Analysis Visualization
-
 ```{r ptm-sea}
 #| message: false
 #| warning: false
@@ -536,22 +571,39 @@ for (i in contrasts_to_export) {
 #| fig-height: 6
 #| fig-width: 8
 
-# 1. Define File Paths
+# 1. Load PTM-SEA Results
+
+# Define File Paths
 files <- list(
   IL  = here("data", "EGF", "IL_Enrichment-ptmsea.csv"),
   PBS = here("data", "EGF", "PBS_Enrichment-ptmsea.csv"),
   PI  = here("data", "EGF", "PI_Enrichment-ptmsea.csv")
 )
 
-# 2. Load Data (Using function from R/load_ptm_data.R)
+# Create Loading Function
+load_ptm_data <- function(filepath, label) {
+  df <- data.table::fread(filepath) 
+  df <- as.data.frame(df)
+  
+  # Clean column names
+  colnames(df) <- gsub(" \\(.*?\\)", "", colnames(df)) 
+  colnames(df) <- gsub("adj p-val", "adj_pval", colnames(df))
+  
+  # Add label
+  df$contrast <- label
+  
+  return(df)
+}
+
+# Load each file
 IL_res  <- load_ptm_data(files$IL, "IL")
 PBS_res <- load_ptm_data(files$PBS, "PBS")
 PI_res  <- load_ptm_data(files$PI, "PI")
 
-# 3. Combine
+# 2. Combine
 ptm_all <- rbind(IL_res, PBS_res, PI_res)
 
-# 4. Plot 1: Overall Count of Regulated Pathways
+# 3. Plot 1: Overall Count of Regulated Pathways
 count_pathways <- ptm_all %>% 
   filter(adj_pval <= 0.05) %>%
   group_by(contrast) %>% 
@@ -564,9 +616,38 @@ ggplot(count_pathways, aes(x = contrast, y = n)) +
   xlab("") + ylab("Number of regulated pathways") +
   ylim(0, max(count_pathways$n) * 1.1)
 
-# 5. Plot Specific Signatures (Using function from R/plot_signature.R)
+# 4. Plot Specific Signatures
 
-# Plot PERT-PSP_EGF
+# Create a plotting function for PTM-SEA results
+plot_signature <- function(data, sig_id, title, y_limit = NULL) {
+  # Filter for the specific signature
+  subset_data <- data %>%
+    filter(`Signature ID` == sig_id)
+  
+  # Check if data exists
+  if (nrow(subset_data) > 0) {
+    p <- ggplot(subset_data, aes(x = contrast, y = Score, fill = adj_pval)) +
+      ggplot2::geom_bar(stat = "identity") +
+      scale_fill_viridis(option = "C", direction = -1) +
+      geom_text(ggplot2::aes(label = round(Score, 2)), vjust = -0.5) +
+      theme_minimal(base_size = 14) +
+      xlab("") +
+      ylab("Score") +
+      ggtitle(title)
+    
+    # Apply y-limits if provided
+    if (!is.null(y_limit)) {
+      p <- p + ylim(y_limit[1], y_limit[2])
+    }
+    
+    print(p)
+    
+  } else {
+    message(paste("Signature not found in results:", sig_id))
+  }
+}
+
+# Plot 3: PERT-PSP_EGF
 plot_signature(
   data = ptm_all, 
   sig_id = "PERT-PSP_EGF", 
@@ -574,7 +655,7 @@ plot_signature(
   y_limit = c(-2, 10)
 )
 
-# Plot PATH-NP_EGFR1_PATHWAY
+# Plot 4: Plot PATH-NP_EGFR1_PATHWAY
 plot_signature(
   data = ptm_all, 
   sig_id = "PATH-NP_EGFR1_PATHWAY", 
