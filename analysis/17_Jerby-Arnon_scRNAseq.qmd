@@ -1,0 +1,182 @@
+---
+title: "Jerby-Arnon scRNAseq data analysis for CRTAM"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(here)
+library(DescTools)
+```
+
+## 2. Data loading & Prep
+```{r load}
+#| message: false
+#| warning: false
+
+data <- fread(here("data/RNAseq/tumors_tpm.txt")) %>% as.data.frame()
+meta <- fread(here("data/RNAseq/tumors.nonmal_tsne_anno.txt")) %>% as.data.frame()
+meta <- meta[-1, ] # Remove first row
+
+# Helper function
+get_gene_expr <- function(df, target_gene) {
+  df %>%
+    filter(GENE == target_gene) %>%
+    select(-GENE) %>%
+    pivot_longer(cols = everything(), names_to = "NAME", values_to = target_gene) %>%
+    mutate(!!target_gene := as.numeric(.data[[target_gene]]))
+}
+```
+
+## 3. CRTAM general expression (all cells)
+```{r CRTAM}
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+
+CRTAM_all <- get_gene_expr(data, "CRTAM") %>%
+  left_join(meta %>% select(1, 6), by = "NAME") %>%
+  mutate(cell.type = replace_na(cell.type, "Melanoma"))
+
+# Violin Plot
+ggplot(CRTAM_all, aes(x = cell.type, y = CRTAM, fill = cell.type)) +
+  geom_violin(trim = FALSE, alpha = 0.6) +
+  stat_summary(fun = median, geom = "point", shape = 18, size = 2, color = "black") +
+  labs(title = "CRTAM expression by cell type", y = "log2[1+(TPM/10)]") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "none")
+```
+
+## 4. CRTAM IN CD8+ T cells (Quartile Definition)
+```{r CRTAM_quartile}
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+
+# Filter meta and data for T.CD8
+meta_CD8 <- meta %>% filter(cell.type == "T.CD8")
+data_CD8 <- data %>% select(GENE, all_of(meta_CD8$NAME))
+
+# Select CRTAM in T.CD8 and define quartiles
+CRTAM_CD8 <- get_gene_expr(data_CD8, "CRTAM") %>%
+  mutate(quartile = case_when(CRTAM == 0 ~ "0", CRTAM > 0  ~ as.character(
+    cut(
+      CRTAM,
+      breaks = quantile(CRTAM[CRTAM > 0], probs = seq(0, 1, 0.25), na.rm = TRUE),
+      include.lowest = TRUE,
+      labels = c("Q1", "Q2", "Q3", "Q4")
+    )
+  )))
+
+# Find ranges Q1 and Q4 and save them as variables
+range_Q1 <- range(CRTAM_CD8$CRTAM[CRTAM_CD8$quartile == "Q1"], na.rm = TRUE)
+range_Q4 <- range(CRTAM_CD8$CRTAM[CRTAM_CD8$quartile == "Q4"], na.rm = TRUE)
+
+# Density Plot for CRTAM
+ggplot(CRTAM_CD8, aes(x = CRTAM)) +
+  geom_density(fill = "grey", alpha = 0.5) +
+  geom_vline(xintercept = range_Q1, linetype = "dashed", color = "red") +
+  geom_vline(xintercept = range_Q4, linetype = "dashed", color = "blue") +
+  labs(x = "CRTAM Expression (log2[1+(TPM/10)])", y = "Density") +
+  theme_minimal()
+
+# Filter for cells in 0, Q1, and Q4
+CRTAM_sel <- CRTAM_CD8 %>% filter(quartile %in% c("0", "Q1", "Q4"))
+CRTAM_sel$quartile <- factor(CRTAM_sel$quartile, levels = c("0", "Q1", "Q4"))
+
+ggplot(CRTAM_sel, aes(x = quartile, y = CRTAM, color = quartile)) +
+  geom_jitter(width = 0.2, alpha = 0.5) +
+  stat_summary(fun = median, geom = "point", shape = 18, size = 3, color = "black") +
+  labs(x = "Quartile", y = "CRTAM Expression (log2[1+(TPM/10)])") +
+  theme_minimal() + theme(legend.position = "none")
+
+# Keep only columns for selected cells
+data_CD8_sel <- data_CD8 %>% select(GENE, all_of(CRTAM_sel$NAME))
+```
+
+# 5. Co-expression analysis (IFNG, TNFRSF9, IL2RG)
+```{r co_expression}
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+
+analyze_target_gene <- function(gene_name) {
+  
+  cat("\n======================================================\n")
+  cat("ANALYSIS FOR:", gene_name, "\n")
+  cat("======================================================\n")
+  
+  # 1. Extract and Merge Data
+  gene_df <- get_gene_expr(data_CD8_sel, gene_name)
+  merged_df <- left_join(gene_df, CRTAM_sel, by = "NAME")
+  merged_df$is_pos <- merged_df[[gene_name]] > 0
+  
+  # 2. Plots
+  p_dens <- ggplot(gene_df, aes(x = .data[[gene_name]])) +
+    geom_density(fill = "red", alpha = 0.5) + theme_minimal() + labs(title = paste(gene_name, "Density"))
+  
+  p_jit <- ggplot(merged_df, aes(x = quartile, y = .data[[gene_name]], color = quartile)) +
+    geom_jitter(width = 0.2, alpha = 0.5) +
+    stat_summary(fun = median, geom = "point", shape = 18, size = 3, color = "black") +
+    labs(x = "CRTAM Quartile", y = paste(gene_name, "Expression (log2[1+(TPM/10)])")) +
+    theme_minimal() + theme(legend.position = "none")
+  
+  # 3. Chi-Squared & Positivity
+  tab <- table(merged_df$quartile, merged_df$is_pos)
+  cat("\n--- Contingency Table ---\n")
+  print(tab)
+  cat("\n--- Chi-Squared Test ---\n")
+  print(chisq.test(tab))
+  cat("\n--- Post-Hoc Test (BH) ---\n")
+  print(PostHocTest(tab, method = "BH"))
+  
+  tab_pos <- as.data.frame(tab) %>%
+    rename(quartile = Var1, is_pos = Var2, count = Freq) %>%
+    group_by(quartile) %>%
+    mutate(percent = (count / sum(count)) * 100) %>%
+    filter(is_pos == TRUE)
+  
+  p_bar <- ggplot(tab_pos, aes(x = quartile, y = percent, fill = quartile)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_text(aes(label = round(percent, 1)), vjust = -0.5) +
+    labs(x = "CRTAM Quartile", y = paste("Percentage of", gene_name, "Positive Cells")) +
+    theme_minimal() + theme(legend.position = "none") + ylim(0, max(tab_pos$percent) + 10)
+  
+  # 4. Kruskal-Wallis & Wilcoxon Tests
+  cat("\n--- Kruskal-Wallis (Positive Cells Only - no 0s) ---\n")
+  pos_cells <- merged_df %>% filter(is_pos == TRUE)
+  print(kruskal.test(as.formula(paste(gene_name, "~ quartile")), data = pos_cells))
+  
+  cat("\n--- Kruskal-Wallis (All Cells) ---\n")
+  print(kruskal.test(as.formula(paste(gene_name, "~ quartile")), data = merged_df))
+  
+  cat("\n--- Pairwise Wilcoxon (All Cells) ---\n")
+  print(pairwise.wilcox.test(merged_df[[gene_name]], merged_df$quartile, p.adjust.method = "BH"))
+  
+  # Print Plots to Viewer
+  print(p_dens)
+  print(p_jit)
+  print(p_bar)
+}
+
+# Run the automated analysis for your targets:
+analyze_target_gene("TNFRSF9")
+analyze_target_gene("IFNG")
+analyze_target_gene("IL2RG")
+```
+

@@ -1,0 +1,416 @@
+---
+title: "Kinase and Pathway Enrichment Analysis output"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(here)
+library(RColorBrewer)
+library(knitr)
+library(viridis)
+library(ggrepel)
+```
+
+## 2. Load Proteome Reference
+```{r load_prot}
+#| message: false
+#| warning: false
+
+# Load Proteome for filtering
+prot_0h <- read_tsv(here("results/SILAC_proteome/Prot_30spd_4patients_0h/PG.MaxLFQ_long_Prot_30spd_4patients_0h.tsv"))
+prot_2h <- read_tsv(here("results/SILAC_proteome/Prot_30spd_4patients_2h/PG.MaxLFQ_long_Prot_30spd_4patients_2h.tsv"))
+
+# Create Filter Lists (Genes detected in H-0h OR M-2h / L-0h OR M-2h)
+valid_genes_H <- union(prot_0h$Genes[prot_0h$Channel == "H"], prot_2h$Genes[prot_2h$Channel == "M"])
+valid_genes_L <- union(prot_0h$Genes[prot_0h$Channel == "L"], prot_2h$Genes[prot_2h$Channel == "M"])
+```
+
+# 3. PEA gcr
+```{r pea}
+#| message: false
+#| warning: false
+#| fig-width: 10
+#| fig-height: 8
+
+# 1. Load ALL PEA files at once
+pea_files <- list.files(path = here("data/SILAC_Phos/PTMNavigator"), pattern = "Enrichment-gcr.csv", full.names = TRUE)
+
+df_pea <- map_dfr(pea_files, function(file) {
+  # Extract metadata from filename
+  fname <- basename(file)
+  parts <- str_split(fname, "_")[[1]]
+  
+  # Read the file
+  d <- read.csv(file, check.names = FALSE) # check.names=FALSE keeps "Signature ID" with space
+  
+  # CLEAN COLUMNS HERE (Before binding)
+  # Remove " (P605_H_p)" and similar patterns from column names
+  colnames(d) <- gsub("\\s*\\(.*\\)", "", colnames(d))
+  
+  # Now the columns are just: "Signature ID", "Score", "adj p-val", etc.
+  
+  # Standardize names to be safe for R (remove spaces, dots)
+  # Signature ID -> Signature.ID
+  # adj p-val -> adj.p.val
+  colnames(d) <- make.names(colnames(d))
+  
+  # Add metadata and return
+  d %>%
+    mutate(
+      TCL = parts[1],      # P605
+      Channel = parts[2]   # H or L
+    ) %>%
+    # Select only the columns we use for plotting
+    select(Signature.ID, Score, adj.p.val, Percent.Overlap, TCL, Channel)
+})
+
+# 2. Scatter H vs L
+# Keep signature if significant (adj.p <= 0.05) in AT LEAST one sample
+sig_pathways <- df_pea %>%
+  group_by(Signature.ID) %>%
+  filter(any(adj.p.val <= 0.05)) %>%
+  ungroup()
+
+# Scatter Plot Prep: Sum scores per channel
+score_wide <- sig_pathways %>%
+  group_by(Signature.ID, Channel) %>%
+  summarise(Score = sum(Score), .groups = "drop") %>%
+  pivot_wider(names_from = Channel, values_from = Score)
+
+# Keep the two pathways with highest score per channel
+top_labels <- score_wide %>%
+  pivot_longer(cols = c(H, L), names_to = "Channel", values_to = "Score") %>%
+  group_by(Channel) %>%
+  slice_max(order_by = Score, n = 2, with_ties = FALSE) %>%
+  ungroup() %>%
+  select(Signature.ID) %>%
+  distinct()
+
+# Create a labelling dataframe (subset of score_wide)
+label_data <- score_wide %>%
+  filter(Signature.ID %in% top_labels$Signature.ID)
+
+# Plot: Scatter H vs L
+ggplot(score_wide, aes(x = H, y = L)) +
+  # Base Points
+  geom_point(size = 3, alpha = 0.6, color = "grey40") +
+  
+  # Highlight the Top Points (Optional: make them red)
+  geom_point(data = label_data, color = "red", size = 3) +
+  
+  # Add Lines
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "black") +
+  geom_hline(yintercept = 0, color = "grey") + 
+  geom_vline(xintercept = 0, color = "grey") +
+  
+  # Add Labels (Only for the top ones)
+  geom_text_repel(
+    data = label_data,
+    aes(label = Signature.ID),
+    box.padding = 0.5,
+    max.overlaps = Inf,
+    size = 3.5,
+    fontface = "bold",
+    color = "black"
+  ) +
+  
+  # Styling
+  labs(
+    title = "ssGSEA 2.0 (gcr): H vs L Channel",
+    x = "Score (Heavy)", 
+    y = "Score (Light)"
+  ) +
+  theme_minimal(base_size = 12) +
+  coord_fixed() # Ensures the diagonal line is truly 45 degrees
+
+# Calculate Correlation
+lm_model <- lm(L ~ H, data = score_wide)
+summary(lm_model)
+
+# 3. Heatmap Prep (Top 20 most significant per channel)
+df_pea <- df_pea %>%
+  mutate(fdr_score = -log10(adj.p.val))
+
+top_H <- df_pea %>% 
+  filter(Channel == "H") %>% 
+  group_by(Signature.ID) %>% 
+  summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
+  slice_max(sum_fdr, n = 20)
+
+top_L <- df_pea %>% 
+  filter(Channel == "L") %>% 
+  group_by(Signature.ID) %>% 
+  summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
+  slice_max(sum_fdr, n = 20)
+
+plot_pathways <- unique(c(top_H$Signature.ID, top_L$Signature.ID))
+cat("Top Pathways for Heatmap:", length(plot_pathways), "\n")
+
+# Heatmap Data
+df_pea_hm <- df_pea %>%
+  filter(Signature.ID %in% plot_pathways) %>%
+  mutate(
+    TCL_Channel = paste(TCL, Channel, sep = "_"),
+    TCL_Channel = factor(
+      TCL_Channel,
+      levels = c(
+        "P605_H",
+        "P905_H",
+        "P915_H",
+        "P924_H",
+        "P605_L",
+        "P905_L",
+        "P915_L",
+        "P924_L"
+      )
+    ),
+    sign = case_when(
+      adj.p.val <= 0.001 ~ "***",
+      adj.p.val <= 0.01  ~ "**",
+      adj.p.val <= 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+# Plot Heatmap
+ggplot(df_pea_hm, aes(x = TCL_Channel, y = reorder(Signature.ID, Score), fill = Score)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sign), vjust = 0.7) +
+  scale_fill_gradient2(low = "darkblue", mid = "white", high = "darkred") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "PEA Top Pathways", x = NULL, y = NULL)
+```
+
+## 4. PTM-SEA (Kinase Enrichment)
+```{r ptmsea}
+#| message: false
+#| warning: false
+#| fig-width: 10
+#| fig-height: 8
+
+# 1. Load Files
+ptm_files <- list.files(path = here("data/SILAC_Phos/PTMNavigator"), pattern = "Enrichment-ptmsea.csv", full.names = TRUE)
+
+df_ptm <- map_dfr(ptm_files, function(file) {
+  # Extract metadata from filename
+  fname <- basename(file)
+  parts <- str_split(fname, "_")[[1]]
+  
+  # Read the file
+  d <- read.csv(file, check.names = FALSE) # check.names=FALSE keeps "Signature ID" with space
+  
+  # CLEAN COLUMNS HERE (Before binding)
+  # Remove " (P605_H_p)" and similar patterns from column names
+  colnames(d) <- gsub("\\s*\\(.*\\)", "", colnames(d))
+  
+  # Now the columns are just: "Signature ID", "Score", "adj p-val", etc.
+  
+  # Standardize names to be safe for R (remove spaces, dots)
+  # Signature ID -> Signature.ID
+  # adj p-val -> adj.p.val
+  colnames(d) <- make.names(colnames(d))
+  
+  d %>%
+    #filter
+    filter(grepl("KINASE", Signature.ID)) %>%
+    #add metadata
+    mutate(
+      TCL = parts[1],
+      Channel = parts[2],
+      kinase = gsub("KINASE-", "", Signature.ID),
+      #Keep text after / if present (e.g. "MAPK1/MAPK3" -> "MAPK3")
+      gene = sub(".*/", "", kinase),
+      #remove text before _
+      gene = sub(".*_", "", gene)
+    )
+})
+
+# 2. Filter by Proteome (Only keep kinases detected in protein data)
+df_ptm_filt <- df_ptm %>%
+  filter(
+    (Channel == "H" & gene %in% valid_genes_H) |
+    (Channel == "L" & gene %in% valid_genes_L)
+  )
+
+# 3. Select Top Kinases (Top 20 per channel by FDR)
+df_ptm_filt <- df_ptm_filt %>% mutate(fdr_score = -log10(adj.p.val))
+
+top_k_H <- df_ptm_filt %>% 
+  filter(Channel == "H") %>% 
+  group_by(kinase, gene) %>% 
+  summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
+  slice_max(sum_fdr, n = 20)
+
+top_k_L <- df_ptm_filt %>% 
+  filter(Channel == "L") %>% 
+  group_by(kinase, gene) %>% 
+  summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
+  slice_max(sum_fdr, n = 20)
+
+target_kinases <- unique(c(top_k_H$kinase, top_k_L$kinase))
+cat("Top Kinases:", length(target_kinases), "\n")
+target_genes <- unique(c(top_k_H$gene, top_k_L$gene))
+cat("Top Genes:", length(target_genes), "\n")
+
+# 4. Heatmap
+df_ptm_hm <- df_ptm_filt %>%
+  filter(kinase %in% target_kinases) %>%
+  mutate(
+    TCL_Channel = paste(TCL, Channel, sep = "_"),
+    TCL_Channel = factor(
+      TCL_Channel,
+      levels = c(
+        "P605_H",
+        "P905_H",
+        "P915_H",
+        "P924_H",
+        "P605_L",
+        "P905_L",
+        "P915_L",
+        "P924_L"
+      )
+    ),
+    sign = case_when(
+      adj.p.val <= 0.005 ~ "***",
+      adj.p.val <= 0.01  ~ "**",
+      adj.p.val <= 0.05  ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+ggplot(df_ptm_hm, aes(x = TCL_Channel, y = reorder(kinase, Score), fill = Score)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sign), vjust = 0.7) +
+  scale_fill_gradient2(low = "darkblue", mid = "white", high = "darkred") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "PTM-SEA Top Kinases", x = NULL, y = NULL)
+```
+
+## 5. RoKAI (Kinase Enrichment)
+```{r rokai}
+#| message: false
+#| warning: false
+#| fig-width: 10
+#| fig-height: 8
+
+# 1. Load Files (Looking for "_kinase_table.csv")
+rokai_files <- list.files(path = here("data/SILAC_Phos/RoKAI"), pattern = "kinase_table.csv", full.names = TRUE)
+
+df_rokai <- map_dfr(rokai_files, function(file) {
+  fname <- basename(file)
+  parts <- str_split(fname, "_")[[1]]
+  
+  read.csv(file) %>%
+    mutate(TCL = parts[1], Channel = parts[2])
+})
+
+# 2. Filter by Proteome (Only keep kinases detected in protein data)
+df_rokai_filt <- df_rokai %>%
+  filter(
+    (Channel == "H" & (Gene %in% valid_genes_H)) |  # Use 'Name' if 'Gene' doesn't exist
+    (Channel == "L" & (Gene %in% valid_genes_L))
+  )
+
+# 3. Select Top Kinases (Top 10 per channel by FDR)
+df_rokai_filt <- df_rokai_filt %>% mutate(fdr_score = -log10(FDR))
+
+top_r_H <- df_rokai_filt %>% 
+  filter(Channel == "H") %>% 
+  group_by(Name) %>% 
+  summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
+  slice_max(sum_fdr, n = 10)
+
+top_r_L <- df_rokai_filt %>% 
+  filter(Channel == "L") %>% 
+  group_by(Name) %>% 
+  summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
+  slice_max(sum_fdr, n = 10)
+
+rokai_targets <- unique(c(top_r_H$Name, top_r_L$Name))
+cat("Top RoKAI Kinases:", length(rokai_targets), "\n")
+
+# 4. Heatmap score
+df_rokai_hm <- df_rokai_filt %>%
+  filter(Name %in% rokai_targets) %>%
+  mutate(
+    TCL_Channel = paste(TCL, Channel, sep = "_"),
+    TCL_Channel = factor(
+      TCL_Channel,
+      levels = c(
+        "P605_H",
+        "P905_H",
+        "P915_H",
+        "P924_H",
+        "P605_L",
+        "P905_L",
+        "P915_L",
+        "P924_L"
+      )
+    ),
+    sign = case_when(
+      fdr_score >= 20  ~ "****",
+      fdr_score >= 10  ~ "***",
+      fdr_score >= 5   ~ "**",
+      fdr_score >= 1.3 ~ "*",
+      TRUE ~ ""
+    )
+  )
+
+ggplot(df_rokai_hm, aes(x = TCL_Channel, y = reorder(Name, ZScore), fill = ZScore)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sign), vjust = 0.7) +
+  scale_fill_gradient2(low = "darkblue", mid = "white", high = "darkred") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "RoKAI Top Kinases", x = NULL, y = NULL)
+
+# 5. Heatmap FDR
+
+df_rokai_hm_av <- df_rokai_hm %>%
+  group_by(Channel, Name) %>%
+  summarise(
+    mean_fdr_score = mean(fdr_score, na.rm = TRUE), 
+    sum_ZScore = sum(ZScore, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+ggplot(df_rokai_hm_av, aes(x = Channel, y = reorder(Name, sum_ZScore), fill = mean_fdr_score)) +
+  geom_tile(color = "darkgrey", lwd = 0.5, linetype = 1) +
+  
+  # Color Scale: Magma (Option A)
+  scale_fill_viridis_c(option = "A", direction = 1, name = "mean [-log10(FDR)]") +
+  
+  # Labels: Rounded FDR Score
+  geom_text(
+    aes(label = round(mean_fdr_score)),
+    size = 4,
+    color = "white" # Changed to white for better contrast on dark viridis colors
+  ) +
+  
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 0, hjust = 0.5, face = "bold"),
+    panel.grid = element_blank()
+  ) +
+  labs(
+    title = "RoKAI Kinases (Aggregated)", 
+    subtitle = "Fill = Mean -log10(FDR), Order = Sum Z-Score",
+    x = NULL, 
+    y = NULL
+  )
+```

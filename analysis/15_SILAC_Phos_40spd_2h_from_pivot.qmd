@@ -1,0 +1,860 @@
+---
+title: "SILAC Phosphoproteome (4 patients, 40 spd) from Pivot Matrix: 2 h"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(tidyverse)
+library(data.table)
+library(here)
+library(RColorBrewer)
+library(knitr)
+library(eulerr)
+library(limma)
+library(pheatmap)
+library(ggrepel)
+```
+
+## 2. Load the data and log2 transform
+```{r load-data}
+#| message: false
+#| warning: false
+
+# 1. Load data
+input_file <- here("results", "SILAC_Phos", "Phosphosite_Top1_Matrix.tsv")
+data <- fread(input_file)
+data <- as.data.frame(data)
+
+cat("Data dimensions:", dim(data), "\n")
+cat("Number of unique phosphosite ids:", length(unique(data$psite.id)), "\n")
+cat("Column names (first 10):", colnames(data)[1:10], "\n")
+
+# 2. Log2 transform
+data[,9:ncol(data)] <- log2(data[,9:ncol(data)])
+```
+
+## 3. Filter data and add new columns for easier handling
+```{r filter-data}
+#| message: false
+#| warning: false
+
+# Keep rows with at least 5 non-NA values (10%)
+cat("Number of intensity columns:", ncol(data) - 8, "\n")
+data <- data[rowSums(!is.na(data[,9:ncol(data)])) >= 5,]
+cat("Number of unique phosphosite ids after filtering:", length(unique(data$psite.id)), "\n")
+
+# Add new columns for easier handling
+data <- data %>% 
+  separate(psite.id, c("Protein_IDs", "psite"), sep = ":", remove = F) %>%
+  mutate(residue = gsub("[^STY]", "", psite)) %>%
+  mutate(gene_site = paste0(Genes, "_", psite)) %>%
+  select(-Protein_IDs, -psite) %>% 
+  select(1:8, 57:58, 9:56) %>%
+  select(1:10, sort(colnames(.)[11:ncol(.)]))
+
+cat("Data dimensions:", dim(data), "\n")
+```
+
+## 4. Long Format
+```{r long-format}
+#| message: false
+#| warning: false
+
+melt <- data %>%
+  pivot_longer(cols = contains("2h_"),
+               names_to = "Run",
+               values_to = "Log2_Intensity")
+melt <- melt[!is.na(melt$Log2_Intensity), ]
+
+melt$patient <- sub("_.*", "", melt$Run)
+cat("Unique patients:", "\n")
+unique(melt$patient)
+
+melt$group <- ifelse(grepl("Co", melt$Run), "Co-culture", "Control")
+cat("Unique groups:", "\n")
+unique(melt$group)
+melt$group <- factor(melt$group, levels = c("Control", "Co-culture"))
+cat("Dimensions of long format data:", dim(melt), "\n")
+
+output_file <- here("results", "SILAC_Phos", "phosphosite_2h_long.txt")
+write_tsv(melt, output_file)
+#This is the input for the webpage!
+```
+
+## 5. Normalization Check
+```{r boxplot}
+#| message: false
+#| warning: false
+#| fig.width: 6
+#| fig.height: 10
+
+# 1. Prepare data for boxplot
+melt <- melt[order(melt$patient, melt$group),]
+melt$Run <- factor(melt$Run, levels = unique(melt$Run))
+
+# 2. Plot Boxplot
+ggplot(melt, aes(x = Run, y = Log2_Intensity, fill = group, color = patient)) +
+  geom_boxplot(lwd = 0.1, outlier.size = 0.1) +
+  scale_fill_brewer(palette = "Set3") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(
+    angle = 90,
+    vjust = 1,
+    hjust = 1
+  )) +
+  xlab("MS run") +
+  ylab("Log2 MS signal") +
+  ggtitle("Boxplot of Log2 MS Intensity - Phosphoproteome 2h")
+
+# 3. Plot Boxplot By Channel
+ggplot(melt, aes(x = Run, y = Log2_Intensity, fill = group, colour = patient)) +
+  geom_boxplot(lwd = 0.1, outlier.size = 0.1) +
+  scale_fill_brewer(palette = "Set3") +
+  scale_color_brewer(palette = "Set1") +
+  theme_minimal(base_size = 10) +
+  theme(axis.text.x = element_text(
+    angle = 90,
+    vjust = 1,
+    hjust = 1
+  )) +
+  xlab("MS run") +
+  ylab("Log2 MS signal") +
+  ggtitle("Boxplot of Log2 MS Intensity by Channel - Phosphoproteome 4 patients 2h") +
+  facet_wrap(~ Channel, nrow = 3)
+
+# 4. Density plot by channel
+ggplot(melt, aes(x = Log2_Intensity)) + 
+  geom_density(aes(color = group)) +
+  facet_wrap(~Channel, labeller = label_both) +
+  scale_color_brewer(palette = "Set1", direction = -1) +
+  theme_minimal(base_size = 12) +
+  xlab("Log2 MS signal") +
+  ggtitle("Density distribution of Log2 MS intensities by Channel - Phosphoproteome 4 patients 2h")
+
+# 5. Density plot by channel and patient
+ggplot(melt, aes(x = Log2_Intensity)) + 
+  geom_density(aes(color = group)) +
+  facet_grid(rows = vars(Channel), cols = vars(patient), labeller = label_both) +
+  scale_color_brewer(palette = "Set1", direction = -1) +
+  theme_minimal(base_size = 12) +
+  xlab("Log2 MS signal") +
+  ggtitle("Density distribution of Log2 MS intensities by Channel and Patient: Phosphoproteome 4 patients 2h")
+```
+
+## 6. Correlation heatmap
+```{r correlation-heatmap}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+#| results: "asis"
+
+# 1. Prepare correlation matrix
+matrix_wide <- melt %>%
+  mutate(sample = paste0(Run, "_", Channel)) %>%
+  select(psite.id, sample, Log2_Intensity) %>%
+  pivot_wider(names_from = sample, values_from = Log2_Intensity) %>%
+  column_to_rownames(var = "psite.id")
+
+cor_matrix <- cor(matrix_wide, use = "pairwise.complete.obs")
+
+# 2. Create annotations
+# Extract group and patient info from column names
+group   <- ifelse(grepl("Co", colnames(matrix_wide), fixed = TRUE), "Co-culture", "Control")
+patient <- sub("_.*", "", colnames(matrix_wide))
+channel <- sub(".*_(.)$", "\\1", colnames(matrix_wide))
+
+annotation_df <- data.frame(Group = group, Patient = patient, Channel = channel)
+rownames(annotation_df) <- colnames(matrix_wide)
+
+# 3. Render Plot
+pheatmap(
+  cor_matrix, 
+  color = colorRampPalette(brewer.pal(n = 7, name = "YlOrBr"))(100),
+  annotation_col = annotation_df,
+  annotation_row = annotation_df,
+  main = "Correlation Heatmap: Phosphoproteome 40 spd 4 patients 2h", 
+  show_rownames = F,
+  show_colnames = F
+)
+```
+
+## 7. Remove medium channel
+```{r remove-medium}
+#| message: false
+#| warning: false
+
+data <- data %>% filter(Channel != "M")
+cat("Data dimensions after removing medium channel:", dim(data), "\n")
+
+melt <- melt %>% filter(Channel != "M")
+cat("Melt dimensions after removing medium channel:", dim(melt), "\n")
+```
+
+## 8. Define Presence / Absence (On/Off) Logic
+```{r presence-absence}
+#| message: false
+#| warning: false
+
+# 1. Identify Column Groups dynamically
+#    Using grepl ensures we find the right columns even if their order changes
+cols_co <- grepl("Co_", colnames(data), fixed = TRUE)
+cols_ctrl <- grepl("Ctrl_", colnames(data), fixed = TRUE)
+
+# 2. Calculate Detection Counts (Number of non-NA values per protein)
+count_co <- rowSums(!is.na(data[, cols_co]))
+count_ctrl <- rowSums(!is.na(data[, cols_ctrl]))
+
+# 3. Define Thresholds
+n_present <- 10
+n_absent  <- 2
+
+# 4. Assign Categories
+#"Up" (Gained):   Present in Co-culture & Absent in Control
+#"Down" (Lost):   Absent in Co-culture & Present in Control
+presence_status <- case_when(
+  count_co >= n_present & count_ctrl <= n_absent ~ "up",
+  count_co <= n_absent & count_ctrl >= n_present ~ "down",
+  TRUE ~ NA_character_
+)
+
+# 5. Create Final Dataframe
+#    We bind the metadata columns (assumed to be 1:10) with the new status
+#    Note: adjusting 1:10 to whatever your metadata columns actually are is safer
+meta_cols <- 1:10 
+df_presence <- cbind(data[, meta_cols], Status = presence_status)
+
+# 6. Filter & Save
+#Keep only rows that are either "up" or "down" (remove NAs)
+df_final <- df_presence %>% filter(!is.na(Status))
+
+# Check results
+cat("Number of proteins categorized as 'up' (gained):", sum(df_final$Status == "up"), "\n")
+print(table(df_final$Status, df_final$Channel))
+
+# Save
+output_file <- here("results", "SILAC_Phos", "Presence_absence.txt")
+write_tsv(df_final, output_file)
+```
+
+## 9. Heatmaps of Relative Intensity (Centered)
+```{r heatmaps}
+#| message: false
+#| warning: false
+#| fig-height: 8
+#| fig-width: 10
+#| results: "asis"
+
+# 1. Scale the data (Centering only)
+# Note: scale = FALSE means we subtract Mean but don't divide by SD
+melt_scaled <- melt %>%
+  group_by(psite.id, Channel) %>%
+  mutate(Log2_Intensity = scale(Log2_Intensity, scale = FALSE)) %>%
+  ungroup()
+
+# 2. Define Loop Settings 
+channels <- c("H", "L")
+
+# Loop through each channel
+for (ch in channels) {
+  
+  message(paste("--> Generating heatmap for Channel:", ch))
+  
+  # A. Prepare Matrix (Filter & Pivot)
+  wide_matrix <- melt_scaled %>%
+    filter(Channel == ch) %>%
+    select(psite.id, Run, Log2_Intensity) %>%
+    pivot_wider(names_from = Run, values_from = Log2_Intensity) %>%
+    column_to_rownames(var = "psite.id")
+  
+  # B. Filter NAs (Keep rows with < 50% missing values)
+  wide_matrix <- wide_matrix[rowSums(is.na(wide_matrix)) < ncol(wide_matrix)/2, ]
+  
+  # C. Create Annotations
+  # Extract group and patient info from column names
+  group   <- ifelse(grepl("Co", colnames(wide_matrix), fixed = TRUE), "Co-culture", "Control")
+  patient <- sub("_.*", "", colnames(wide_matrix))
+  
+  annotation_df <- data.frame(
+    Group = group, 
+    Patient = patient
+  )
+  rownames(annotation_df) <- colnames(wide_matrix)
+  
+  # D. Calculate Dynamic Breaks
+  abs_values <- abs(as.matrix(wide_matrix))
+  limit <- quantile(abs_values, 0.99, na.rm = TRUE)
+  
+  # Round it to a nice number
+  limit <- ceiling(limit)
+  
+  # Force a minimum limit
+  limit <- max(limit, 2)
+  
+  breaks_dynamic <- seq(-limit, limit, length.out = 101)
+  
+  # E. Render Plot
+  pheatmap(
+    wide_matrix,
+    color = colorRampPalette(rev(brewer.pal(n = 11, name = "RdBu")))(100),
+    breaks = breaks_dynamic,
+    cluster_cols = TRUE,
+    cluster_rows = TRUE,
+    show_rownames = FALSE,
+    angle_col = 90,
+    annotation_col = annotation_df,
+    main = paste("Heatmap of Relative Intensities (Centered): Channel", ch)
+  )
+}
+```
+
+## 10. Differential Expression Analysis with Limma
+```{r differential-expression}
+#| message: false
+#| warning: false
+
+# 1. PREPARE DATA
+# Create a list of 2 matrices (H, L)
+# We keep only the Intensity "2h" columns + row names
+limma_list <- data %>%
+  select(psite.id, Channel, contains("2h")) %>%
+  split(.$Channel) %>%
+  map(~ .x %>%
+        remove_rownames() %>%
+        column_to_rownames("psite.id") %>% 
+        select(contains("2h")))
+
+cat("Number of phosphosites per channel:\n")
+sapply(limma_list, nrow)
+
+# 2. FILTERING LOOP
+# Iterate over the list
+list_filtered <- map(limma_list, function(mat) {
+  
+  # A. Identify Patients dynamically
+  patients <- unique(sub("_.*", "", colnames(mat)))
+  
+  # B. Filter: at least 3 patients with 2 valid values
+  #At least 2 valid values per patient
+  patient_validity <- sapply(patients, function(p) {
+    cols <- grep(p, colnames(mat))
+    rowSums(!is.na(mat[, cols])) >= 2
+  })
+  # Keep rows where at least 3 patients pass the check
+  keep_patients <- rowSums(patient_validity) >= 3
+  
+  # C. Filter: At least 3 valid in Ctrl AND 3 in Co-culture
+  ctrl_cols <- grep("Ctrl", colnames(mat))
+  co_cols   <- grep("Co",   colnames(mat))
+  
+  keep_groups <- rowSums(!is.na(mat[, ctrl_cols])) >= 3 & 
+                 rowSums(!is.na(mat[, co_cols]))   >= 3
+  
+  # Return the filtered matrix
+  return(mat[keep_patients & keep_groups, ])
+})
+
+cat("Number of phosphosites per channel after filtering:\n")
+sapply(list_filtered, nrow)
+
+# 3. STATS LOOP (Limma)
+limma_results <- imap_dfr(list_filtered, function(mat, channel_name) {
+  
+  cat(paste("Running Limma for:", channel_name), "\n")
+  
+  # Define Groups
+  patient <- sub("_.*", "", colnames(mat))
+  group   <- ifelse(grepl("Co_", colnames(mat)), "Co-culture", "Control")
+  group   <- factor(group, levels = c("Control", "Co-culture"))
+  
+  # Design & Correlation
+  design <- model.matrix(~ group)
+  corfit <- duplicateCorrelation(mat, design, block = patient)
+  
+  # Fit
+  fit <- lmFit(mat, design, block = patient, correlation = corfit$consensus.correlation)
+  cat("Consensus correlation:", corfit$consensus.correlation, "\n")
+  fit <- eBayes(fit, trend = TRUE)
+  
+  # Extract Table
+  topTable(fit, coef = 2, number = nrow(fit), sort.by = "none") %>%
+    rownames_to_column("psite.id") %>%
+    mutate(Channel = channel_name)
+})
+
+# 4. CUTOFF CALCULATION
+
+# Calculate the dynamic cutoff (Median Absolute Deviation)
+cutoff_stats <- limma_results %>%
+  mutate(direction = ifelse(logFC > 0, "Up", "Down")) %>%
+  group_by(Channel, direction) %>%
+  summarise(
+    mad_val = 2.7 * mad(abs(logFC)),
+    .groups = "drop"
+  )
+
+final_cutoff <- round(mean(cutoff_stats$mad_val),2)
+cat("Dynamic Cutoff calculated: +/- ", round(final_cutoff, 3), "\n")
+
+# Assign Regulation
+limma_results <- limma_results %>%
+  mutate(
+    Regulation = case_when(
+      logFC > final_cutoff  & adj.P.Val <= 0.01 ~ "Up",
+      logFC < -final_cutoff & adj.P.Val <= 0.01 ~ "Down",
+      TRUE ~ "Unchanged"
+    )
+  )
+
+# 5. ADD PHOS METADATA
+phos_meta <- data %>%
+  select(1:10) %>%
+  select(-Channel, -Precursor.Id) %>%
+  distinct()
+col_phos_meta <- colnames(phos_meta)
+
+limma_results <- limma_results %>%
+  left_join(phos_meta, by = "psite.id") %>%
+  relocate(col_phos_meta, .after = psite.id)
+
+# 6. SAVE DATA
+output_file <- here("results", "SILAC_Phos", "SILAC_Phos_40spd_4patients_2h_Limma_results.tsv")
+write_tsv(limma_results, output_file)
+```
+
+## 11. Count significantly regulated phosphosites
+```{r count}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 6
+
+# 1. Count
+count <- limma_results %>%
+  group_by(Channel, Regulation) %>%
+  summarise(n = n()) %>%
+  ungroup()
+
+# 2. Bar Plot
+ggplot(count %>% filter(Regulation != "Unchanged"), aes(x = Channel, y = n, fill = Regulation)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(palette = "Set1", direction = -1) +
+  geom_text(aes(label = n), position = position_dodge(width = 1), vjust = -0.5) +
+  xlab("Contrast") +
+  ylab("Number of regulated proteins") +
+  theme_minimal(base_size = 12) +
+  ggtitle("Regulated phosphosites adj.p <= 0.01 & fc cutoff: SILAC Phosphoproteome 4 patients, 40 spd 2h") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## 12. Density plot of logfc
+```{r density-plot}
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 5
+
+ggplot(limma_results, aes(x = logFC, fill = Channel)) +
+  geom_density(alpha = 0.5) +
+  geom_vline(xintercept = c(-0.65, 0.65), linetype = "dashed") +
+  
+  # Split into 3 panels
+  facet_wrap(~Channel, labeller = label_both) + 
+  
+  # Manual colors to match your original code
+  scale_fill_manual(values = c("H" = "red", "L" = "blue", "M" = "yellow")) +
+  
+  labs(
+    title = "LogFC Distribution per Channel (6h)",
+    x = "Log2 FC Co-Culture vs Ctrl"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+## 13. Heatmap of significant phosphosites
+```{r heatmap-significant}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 10
+
+# 1. Filter & Clean Data
+# Get list of regulated phosphosites
+sig_sites <- limma_results %>% 
+  filter(Regulation != "Unchanged")
+
+# Filter the main dataframe
+df_clean <- melt %>%
+  filter(psite.id %in% sig_sites$psite.id) %>%
+  mutate(sample_id = paste0(Run, "_", Channel))
+
+# 2. Dynamic Imputation
+# Impute missing values using the minimum value of each Channel (H vs L)
+df_imputed <- df_clean %>%
+  # This creates a row for every combination of (psite) and (sample)
+  # nesting() keeps the linked metadata (e.g. gene_site stays with psite.id)
+  complete(nesting(psite.id, gene_site), nesting(Run, Channel)) %>%
+  # Now we have NAs. Group by Channel to find the specific min for H and L.
+  group_by(Channel) %>%
+  mutate(
+    # Calculate min of the ACTUAL data (ignoring the NAs we just made)
+    min_val = min(Log2_Intensity, na.rm = TRUE),
+    # Fill NAs with that channel's minimum
+    value = ifelse(is.na(Log2_Intensity), min_val, Log2_Intensity)
+  ) %>%
+  ungroup()
+
+# Check: The number of rows should now be (Num_Sites * Num_Samples)
+cat("Dimensions after imputation (should be Sites x Samples):", dim(df_imputed), "\n")
+print(dim(df_imputed))
+
+# 3. Extract Metadata
+df_annotated <- df_imputed %>%
+  mutate(
+    # Extract Patient ID (Finds "P" followed by numbers, e.g., P905)
+    patient = str_extract(Run, "P\\d+"),
+    
+    # Define Group based on string presence
+    group = ifelse(grepl("Co", Run), "Co-culture", "Control")
+  )
+
+# 4. Mean centering
+df_norm <- df_annotated %>%
+  group_by(psite.id, gene_site, Channel, patient) %>%
+  mutate(centered_val = scale(value, center = TRUE, scale = FALSE)) %>%
+  ungroup() %>%
+  
+  # Summarize (Average replicates if they exist)
+  group_by(gene_site, group, patient, Channel) %>%
+  summarise(val = mean(centered_val, na.rm = TRUE), .groups = "drop")
+
+# 5. Reshape for Heatmap
+# Construct unique column names: "Control_P905_H"
+mat_hm <- df_norm %>%
+  mutate(col_name = paste(group, patient, Channel, sep = "_")) %>%
+  select(gene_site, col_name, val) %>%
+  pivot_wider(names_from = col_name, values_from = val) %>%
+  column_to_rownames("gene_site")
+
+# Replace any remaining NaNs with 0
+mat_hm[is.na(mat_hm)] <- 0
+
+# 6. Column Ordering & Annotation
+# Hierarchy: Channel (H -> L) -> Group (Control -> Co) -> Patient
+
+# Define the exact order for each factor
+order_channel <- c("H", "L")
+order_group   <- c("Control", "Co-culture")
+order_patient <- c("P605", "P905", "P915", "P924") # Adjust if needed
+
+# Generate the target order of column names programmatically
+# expand.grid creates all combinations in order
+target_order <- expand.grid(
+  pat = order_patient, 
+  grp = order_group, 
+  chn = order_channel, 
+  stringsAsFactors = FALSE
+) %>%
+  # Construct the string "Group_Patient_Channel" to match mat_hm columns
+  mutate(col_name = paste(grp, pat, chn, sep = "_")) %>%
+  pull(col_name)
+
+# Intersect to keep only columns that actually exist in your data
+final_order <- intersect(target_order, colnames(mat_hm))
+
+# Reorder Matrix
+mat_hm <- mat_hm[, final_order]
+
+# Define Annotation Colors
+anno_colors <- list(
+  Group = c("Control" = "grey90", "Co-culture" = "#386cb0"),
+  Channel = c("H" = "#E69F00", "L" = "#56B4E9"),
+  Patient = c("P905"="#1b9e77", "P915"="#d95f02", "P924"="#7570b3", "P605"="#e7298a")
+)
+
+# 7. Plot
+pheatmap(
+  mat_hm,
+  color = colorRampPalette(rev(brewer.pal(11, "RdBu")))(100),
+  breaks = seq(-4, 4, length.out = 101),
+  cluster_cols = FALSE,
+  cluster_rows = TRUE,
+  clustering_distance_rows = "maximum", 
+  annotation_col = anno_col,
+  annotation_colors = anno_colors,
+  show_rownames = FALSE,
+  border_color = NA,
+  main = "Regulated Phosphosites"
+)
+```
+
+## 14. Differential regulation analysis (H vs L)
+```{r differential-regulation-HL}
+#| message: false
+#| warning: false
+
+# 1. Load PSP Annotation File
+reg_sites_path <- here("data/SILAC_Phos/regulatory_sites.txt")
+regulatory_sites <- fread(reg_sites_path) %>% 
+  as.data.frame() %>%
+  # Filter for Human and Phosphorylation only
+  filter(ORGANISM == "human") %>%
+  filter(grepl("-p", MOD_RSD)) %>%
+  # Create the Join Key (ACC_ID:Residue)
+  mutate(
+    # Remove "-p" from "S39-p" -> "S39"
+    residue = sub("-p", "", MOD_RSD),
+    # Create Key: "P08670:S39"
+    psite.id = paste0(ACC_ID, ":", residue)
+  )
+
+# 2. Prepare LogFC Data (Wide Format)
+regulated_annotated <- limma_results %>%
+  filter(psite.id %in% sig_sites$psite.id) %>%
+  select(psite.id, gene_site, Channel, logFC) %>%
+  pivot_wider(
+    names_from = Channel, 
+    values_from = logFC, 
+    names_prefix = "logFC_"
+  ) %>%
+  # Replace NA with 0 (Assuming NA means "not detected/no change" in that channel)
+  mutate(
+    logFC_H = replace_na(logFC_H, 0),
+    logFC_L = replace_na(logFC_L, 0),
+    # Calculate Difference (Delta LogFC)
+    # Positive = More induced in H; Negative = More induced in L
+    diff_HL = logFC_H - logFC_L,
+    #remove _M1
+    psite.id = sub("_.*", "", psite.id)
+    ) %>%
+  #Annotate with Known Regulatory Sites
+  left_join(regulatory_sites, by = "psite.id", relationship = "many-to-one") %>%
+  # Filter: Keep only those with a known annotation
+  filter(!is.na(ON_FUNCTION)) # Adjust column name if it's not ON_FUNCTION
+
+# 5. Save Results
+write.table(regulated_annotated, here("Results/SILAC_Phos/Regulated_Known_Sites.txt"), 
+            sep = "\t", row.names = FALSE, quote = FALSE)
+```
+
+## 15. Plot specific phosphosites
+```{r specific-phosphosites}
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 15
+
+# 1. Define your list of targets
+targets <- c("VIM_S39_M1", "CD247_Y142_M1", "PRKDC_S2612_M1", "RIPK1_S320_M1")
+
+# 2. Filter data for ALL targets at once
+df_plot <- melt %>% 
+  filter(gene_site %in% targets)
+
+# 3. Plot with facet_grid
+ggplot(df_plot, aes(
+  x = patient,
+  y = Log2_Intensity,
+  fill = group
+)) +
+  # Points with jitter
+  geom_point(
+    size = 3,
+    shape = 21,
+    color = "black",
+    position = position_jitterdodge(dodge.width = 0.7, jitter.height = 0, jitter.width = 0.2)
+  ) +
+  # Mean Bar (Horizontal line at mean)
+  stat_summary(
+    fun = mean,
+    geom = "errorbar",
+    aes(ymax = ..y.., ymin = ..y..),
+    position = position_dodge(0.7),
+    width = 0.35,
+    color = "black", 
+    size = 0.8
+  ) +
+  # Colors
+  scale_fill_brewer(palette = "Set1", direction = -1) +
+  guides(
+    fill = guide_legend(override.aes = list(shape = 21, size = 4)),
+    shape = guide_legend(override.aes = list(size = 4))
+  ) +
+  # Formatting
+  labs(x = NULL, y = "Log2 Intensity") +
+  theme_bw(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5),
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    strip.text = element_text(face = "bold")
+  ) +
+  facet_grid(gene_site ~ Channel, scales = "free_y")
+```
+
+## 16. Differential expression analysis with Limma by patient
+```{r limma-by-patient}
+#| message: false
+#| warning: false
+#| fig.width: 10
+#| fig.height: 10
+
+# 1. DEFINE ANALYSIS FUNCTION
+# This function takes a specific Patient/Channel subset and runs Limma
+run_limma_subset <- function(subset_df, label) {
+  
+  # A. FILTERING: Keep rows with >=2 valid values in BOTH groups
+  # Identify columns dynamically based on names
+  idx_ctrl <- grep("Ctrl", colnames(subset_df))
+  idx_co   <- grep("Co_", colnames(subset_df))
+  
+  keep <- rowSums(!is.na(subset_df[, idx_ctrl])) >= 2 &
+          rowSums(!is.na(subset_df[, idx_co]))   >= 2
+  
+  filtered_df <- subset_df[keep, ]
+  
+  # Return NULL if data is empty after filtering
+  if (nrow(filtered_df) < 2) return(NULL)
+  
+  # B. LIMMA ANALYSIS
+  group <- ifelse(grepl("Co_", colnames(filtered_df)), "Co-culture", "Control")
+  group <- factor(group, levels = c("Control", "Co-culture"))
+  design <- model.matrix(~ group)
+  
+  fit <- lmFit(filtered_df, design)
+  fit <- eBayes(fit, trend = TRUE)
+  
+  # C. FORMAT RESULTS
+  topTable(fit, coef = 2, number = Inf, sort.by = "none") %>%
+    rownames_to_column("psite.id") %>%
+    mutate(TCL_Channel = label) # Add the identifier (e.g., "P605_H")
+}
+
+# 2. RUN ANALYSIS (Automated Loop)
+# Define patients and channels to iterate over
+patients <- c("P605", "P905", "P915", "P924")
+channels <- c("H", "L")
+
+# Create a grid of all combinations (4 Patients * 2 Channels = 8 runs)
+analysis_grid <- expand.grid(Patient = patients, Channel = channels, stringsAsFactors = FALSE)
+
+# Process all combinations in one go using map_dfr
+limma_patient <- map2_dfr(analysis_grid$Patient, analysis_grid$Channel, function(p, c) {
+  
+  # Dynamic Subset: Filter by Channel -> Set RowNames -> Select Patient Cols
+  data_subset <- data %>%
+    filter(Channel == c) %>%
+    column_to_rownames("psite.id") %>%
+    select(contains(p))
+  
+  # Run the function defined above
+  run_limma_subset(subset_df = data_subset, label = paste(p, c, sep = "_"))
+})
+
+# 3. ANNOTATE & SAVE
+# Join back metadata (Gene names, etc.)
+matrix_meta <- data %>% 
+  select(1:10) %>%
+  select(-Channel, -Precursor.Id) %>%
+  distinct()
+limma_patient <- left_join(limma_patient, matrix_meta, by = "psite.id")
+
+write.table(
+  limma_patient,
+  here("results", "SILAC_Phos", "Limma_by_Patient_Channel.tsv"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+
+# 4. PLOT SUMMARY
+# Prepare data for plotting
+plot_data <- limma_patient %>%
+  mutate(Regulation = case_when(
+    adj.P.Val <= 0.05 & logFC > 0 ~ "Up",
+    adj.P.Val <= 0.05 & logFC < 0 ~ "Down",
+    TRUE ~ "Unchanged"
+  )) %>%
+  separate(TCL_Channel, c("TCL", "Channel"), sep = "_") %>%
+  filter(Regulation != "Unchanged") %>%
+  count(TCL, Channel, Regulation)
+
+# Plot
+ggplot(plot_data, aes(x = Channel, y = n, fill = Regulation)) +
+  geom_col(position = "dodge") +
+  geom_text(aes(label = n), position = position_dodge(width = 0.9), vjust = -0.5) +
+  scale_fill_brewer(palette = "Set1", direction = -1) +
+  labs(x = NULL, y = "Number of regulated phosphosites") +
+  theme_minimal(base_size = 12) +
+  facet_wrap(~TCL)
+```
+
+## 17. Prepare input for RoKAI and PTMNavigator
+```{r prepare-input}
+#| message: false
+#| warning: false
+
+# 1. Common calculations (Signed -log10 P-value)
+limma_prep <- limma_patient %>%
+  mutate(
+    
+    # Create Signed P-value score
+    logP_val = -log10(P.Value),
+    signed_score = ifelse(logFC > 0, logP_val, -logP_val),
+    
+    # Create Position String (e.g. S39)
+    site_str = paste0(residue, site_pos)
+  ) %>%
+  
+  # Aggregate: Keep the site with the Maximum Absolute Score
+  group_by(id, site_str, TCL_Channel) %>%
+  slice_max(abs(signed_score), n = 1, with_ties = FALSE) %>%
+  ungroup()
+
+# 2. RoKAI Input Generation (Aggregation: Mean)
+limma_prep %>%
+  
+  # Select and Rename necessary columns
+  select(Protein = id, Position = site_str, Quantification = signed_score, TCL_Channel) %>%
+  
+  # Split by Patient_Channel and Save automatically
+  group_by(TCL_Channel) %>%
+  group_walk(~ write_csv(.x, here("Results/SILAC_Phos/RoKAI", paste0(.y$TCL_Channel, "_RoKAI.csv"))))
+
+# 3. PTMNavigator Input Generation (Aggregation: Max Abs)
+limma_prep %>%
+  
+  # Create Regulation Column
+  mutate(Regulation = case_when(
+    signed_score > 0 & adj.P.Val <= 0.05 ~ "Up",
+    signed_score < 0 & adj.P.Val <= 0.05 ~ "Down",
+    TRUE ~ "Unchanged"
+  )) %>%
+  
+  # Rename for PTMNavigator
+  select(
+    `Protein IDs` = id,
+    `p-site` = site_str,
+    `Log Fold Change` = signed_score, # You wanted signed -logP here, correct?
+    `Adjusted pvalue` = adj.P.Val,
+    Regulation,
+    TCL_Channel
+  ) %>%
+  
+  # Split by Patient_Channel and Save automatically
+  group_by(TCL_Channel) %>%
+  group_walk(~ write_csv(.x, here("Results/SILAC_Phos/PTMNavigator", paste0(.y$TCL_Channel, "_PTMNavigator.csv"))))
+```
+
+

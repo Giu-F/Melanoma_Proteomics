@@ -1,0 +1,183 @@
+---
+title: "Analysis of the Tumor Immune Dysfunction and Exclusion (TIDE) database"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+library(data.table)
+library(tidyverse)
+library(here)
+```
+
+## 2. AUTOMATED TIDE ANALYSIS: one gene at the time
+```{r tide}
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+
+#Analysis function
+analyze_tide_gene <- function(gene_name) {
+  
+  cat("Processing TIDE data for:", gene_name, "\n")
+  
+  # 1. Load Data Dynamically
+  file_path <- here("data/TIDE", paste0(gene_name, "_expression.csv"))
+  df <- fread(file_path) %>% as.data.frame()
+  
+  # 2. Clean and Filter Data
+  df_clean <- df %>%
+    # Replace spaces with underscores in column names
+    rename_with(~ str_replace_all(.x, " ", "_")) %>%
+    
+    # Mutate columns (Rename Ovary, Create Cohort_Subtype)
+    mutate(
+      Cancer = str_replace(Cancer, "Ovary", "Ovarian"),
+      Cohort_Subtype = str_remove(paste(Cohort, Subtype, sep = "_"), "_$")) %>%
+    
+    # Filter for Overall Survival (OS)
+    filter(Survival == "OS") %>%
+    
+    # Keep only Cancers with > 2 cohorts
+    group_by(Cancer) %>%
+    filter(n_distinct(Cohort) > 2) %>%
+    ungroup()
+  
+  # 3. PLOT 1: Pearson Correlation (CTL_Cor)
+  p1 <- ggplot(df_clean, aes(x = Cancer, y = CTL_Cor)) +
+    geom_jitter(size = 2, width = 0.2, color = "grey50") +
+    stat_summary(
+      fun = mean, 
+      geom = "crossbar",
+      aes(ymin = after_stat(y), ymax = after_stat(y)),
+      width = 0.4, 
+      color = "black", 
+      middle.linewidth = 2
+    ) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+    labs(
+      title = paste(gene_name, "- Pearson correlation with CTL infiltration"),
+      x = NULL, 
+      y = "CTL Correlation"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # 4. PLOT 2: Risk and Risk Adjusted
+  # Convert to long format
+  df_long <- df_clean %>%
+    pivot_longer(
+      cols = c(Risk, Risk.adj),
+      names_to = "Risk_Type",
+      values_to = "Risk_Value"
+    )
+  
+  p2 <- ggplot(df_long, aes(x = Cancer, y = Risk_Value, color = Risk_Type)) +
+    geom_jitter(
+      size = 2,
+      position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8)
+    ) +
+    stat_summary(
+      fun = mean, 
+      geom = "crossbar",
+      aes(ymin = after_stat(y), ymax = after_stat(y), group = Risk_Type),
+      width = 0.4, 
+      color = "black", 
+      middle.linewidth = 2,
+      position = position_dodge(width = 0.8) # Matched dodge.width to align crossbars!
+    ) +
+    geom_hline(yintercept = -1, linetype = "dashed", color = "blue") +
+    geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+    labs(
+      title = paste(gene_name, "- Risk and Risk adj. by cancer type"),
+      x = NULL, 
+      y = "Risk Value"
+    ) +
+    theme_minimal(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # 5. Print Plots
+  print(p1)
+  print(p2)
+}
+
+# RUN ANALYSIS
+analyze_tide_gene("CRTAM")
+analyze_tide_gene("PRKDC")
+analyze_tide_gene("CD8A")
+```
+
+## 3. TIDE ANALYSIS: compare 2 genes
+```{r tide2}
+#| message: false
+#| warning: false
+#| fig-width: 8
+#| fig-height: 6
+
+# 1. LOAD & COMBINE DATA DYNAMICALLY
+# List the genes you want to compare.
+genes_to_compare <- c("CRTAM", "CD8A")
+
+# Load all files in the list and bind them together automatically
+data_combined <- map_dfr(genes_to_compare, function(g) {
+  file_path <- here("data/TIDE", paste0(g, "_expression.csv"))
+  fread(file_path) %>%
+    as.data.frame() %>%
+    mutate(Gene = g) # Automatically adds the Gene column
+})
+
+# 2. CLEAN & FILTER
+data_clean <- data_combined %>%
+  # Fix column names (spaces to underscores)
+  rename_with(~ str_replace_all(.x, " ", "_")) %>%
+  
+  # Clean text columns
+  mutate(
+    Cancer = str_replace(Cancer, "Ovary", "Ovarian"),
+    Cohort_Subtype = str_remove(paste(Cohort, Subtype, sep = "_"), "_$")
+  ) %>%
+  
+  # Filter for OS
+  filter(Survival == "OS") %>%
+  
+  # Rule 1: Remove Cancer types with <= 2 cohorts for a specific gene
+  group_by(Cancer, Gene) %>%
+  filter(n_distinct(Cohort) > 2) %>%
+  ungroup() %>%
+  
+  # Rule 2: Keep ONLY Cancers that have data for BOTH genes
+  group_by(Cancer) %>%
+  filter(n_distinct(Gene) == length(genes_to_compare)) %>%
+  ungroup()
+
+# 2. PLOT CTL CORRELATION (CRTAM vs CD8A)
+ggplot(data_clean, aes(x = Cancer, y = CTL_Cor, color = Gene)) +
+  geom_jitter(
+    size = 2, alpha = 0.7,
+    position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.8)
+  ) +
+  stat_summary(
+    fun = mean, geom = "crossbar",
+    aes(ymin = after_stat(y), ymax = after_stat(y), group = Gene),
+    width = 0.4, color = "black", fatten = 2,
+    position = position_dodge(width = 0.8)
+  ) +
+  labs(
+    title = "Correlation with CTL infiltration by cancer type", 
+    x = NULL, y = "CTL Correlation"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_color_brewer(palette = "Set1")
+```
+

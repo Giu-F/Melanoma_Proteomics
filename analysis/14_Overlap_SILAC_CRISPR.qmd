@@ -1,0 +1,409 @@
+---
+title: "Overlap between proteins regulated by T cell attack and published CRISPR screens"
+author: "Giulia Franciosa"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Load Libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(data.table)
+library(tidyverse)
+library(here)
+library(eulerr)
+library(RColorBrewer)
+library(pheatmap)
+library(ggrepel)
+```
+
+## 2. Load SILAC data
+```{r load_silac}
+#| message: false
+#| warning: false
+
+# Define paths
+silac_main   <- "results/SILAC_proteome"
+silac_6h <- "results/SILAC_proteome/Prot_30spd_4patients_6h"
+
+# Helper function to load and clean gene names
+load_silac_gene <- function(folder, filename) {
+  df <- fread(here(folder, filename)) %>% as.data.frame()
+  df$Gene <- gsub(";.*", "", df$Gene)
+  return(df)
+}
+
+# Load SILAC Proteome 6h Limma file
+silac_limma <- load_silac_gene(silac_6h, "SILAC_Prot_30spd_4patients_6h_Limma_results.tsv")
+
+# Load SILAC Presence/Absence 
+silac_presence <- load_silac_gene(silac_main, "presence_medium.txt")
+silac_absence  <- load_silac_gene(silac_main, "absence_medium.txt")
+
+# Define SILAC M Universe (All proteins detected in M)
+silac_m_genes <- unique(silac_limma[silac_limma$Channel == "M", "Gene"])
+cat("Total SILAC M genes:", length(silac_m_genes), "\n")
+```
+
+## 3. Load CRISPR data
+```{r function}
+#| message: false
+#| warning: false
+
+# 1. Analysis Function
+analyze_screen <- function(file_path, dataset_name, pos_col, neg_col, threshold) {
+  
+  message(paste("Processing:", dataset_name))
+  
+  # A. Load & Clean CRISPR Data
+  crispr <- fread(here(file_path)) %>% as.data.frame()
+  
+  # Standardize IDs
+  colnames(crispr) <- gsub("\\|", "_", colnames(crispr))
+  colnames(crispr) <- gsub("-", "_", colnames(crispr))
+  
+  # Rename the specific p-value columns to standard names for easier filtering
+  crispr <- crispr %>%
+    mutate(id = toupper(id))
+  
+  # Check Uniqueness
+  if(length(unique(crispr$id)) != nrow(crispr)) warning("Duplicate IDs found in CRISPR data")
+
+  # B. Define Sets (Mutual Filtering for Euler)
+  
+  # 1. Filter SILAC by CRISPR Universe
+  silac_up <- silac_limma %>%
+    filter(Channel == "M", Regulation == "Up", Gene %in% crispr$id) %>%
+    pull(Gene) %>%
+    c(., silac_presence$Gene[silac_presence$Gene %in% crispr$id]) %>% unique()
+  
+  silac_down <- silac_limma %>%
+    filter(Channel == "M", Regulation == "Down", Gene %in% crispr$id) %>%
+    pull(Gene) %>%
+    c(., silac_absence$Gene[silac_absence$Gene %in% crispr$id]) %>% unique()
+  
+  # 2. Filter CRISPR by SILAC Universe
+  crispr_pos <- crispr %>%
+    filter(id %in% silac_m_genes, .data[[pos_col]] <= threshold) %>%
+    pull(id)
+  
+  crispr_neg <- crispr %>%
+    filter(id %in% silac_m_genes, .data[[neg_col]] <= threshold) %>%
+    pull(id)
+  
+  # C. Euler Plot
+  overlap_list <- list(
+    silac_up = silac_up, 
+    silac_down = silac_down,
+    crispr_pos = crispr_pos, 
+    crispr_neg = crispr_neg
+  )
+  
+  p <- plot(euler(overlap_list), quantities = TRUE, 
+            fills = c("lightblue", "lightpink", "lightgreen", "lightyellow"),
+            main = paste(dataset_name, "Overlap"))
+  print(p) # Display plot
+  
+  # D. Calculate Intersections & Return Data
+  # We create a long dataframe of all overlaps
+  overlaps <- list(
+    "Up_Pos"   = intersect(silac_up, crispr_pos),
+    "Down_Neg" = intersect(silac_down, crispr_neg),
+    "Up_Neg"   = intersect(silac_up, crispr_neg),
+    "Down_Pos" = intersect(silac_down, crispr_pos)
+  )
+  
+  # Convert list to dataframe
+  df_out <- map_dfr(names(overlaps), function(cat) {
+    if(length(overlaps[[cat]]) == 0) return(NULL)
+    data.frame(Gene = overlaps[[cat]], Category = cat, Dataset = dataset_name)
+  })
+  
+  return(df_out)
+}
+
+# 2. Execute Analysis -----------------------------------------------------
+
+# Define path
+crispr_path <- "data/CRISPR"
+
+# Run Kearney
+res_kearney <- analyze_screen(
+  file_path = paste0(crispr_path, "/Kearney_aar3451_table_s3.txt"),
+  dataset_name = "Kearney",
+  pos_col = "pos_p_value",
+  neg_col = "neg_p_value",
+  threshold = 0.01
+)
+
+# Run Zhang
+res_zhang <- analyze_screen(
+  file_path = paste0(crispr_path, "/1-s2.0-S2666379122001872-mmc2.txt"),
+  dataset_name = "Zhang",
+  pos_col = "pos.fdr", 
+  neg_col = "neg.fdr", 
+  threshold = 0.05
+)
+```
+
+## 4. Save Outputs
+```{r save}
+#| message: false
+#| warning: false
+
+# Combine all results into one master file
+final_combined <- bind_rows(res_kearney, res_zhang)
+cat("Total overlapping genes across both datasets:", "\n")
+table(final_combined$Dataset, final_combined$Category)
+
+# Remove dataset-specific duplicates (if any gene appears in multiple categories within the same dataset, we keep it only once)
+final_combined <- final_combined %>%
+  group_by(Gene) %>%
+  slice(1) %>%
+  ungroup()
+cat("Total overlapping genes across both datasets wo duplicates:", "\n")
+table(final_combined$Category)
+
+# Save Master File
+write.table(
+  final_combined,
+  here("Results", "CRISPR", "CRISPR_SILAC_Combined_Overlaps.txt"),
+  sep = "\t",
+  row.names = FALSE,
+  quote = FALSE
+)
+```
+
+## 5. Heatmaps
+```{r heatmaps}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 10
+
+# 1. Load SILAC proteome 6h (long format)
+pg_data <- fread(here(silac_6h, "PG.MaxLFQ_long_Prot_30spd_4patients_6h.tsv")) %>%
+  as.data.frame()
+
+# Filter for Medium Channel & Clean Genes
+medium_scaled <- pg_data %>%
+  filter(Channel == "M") %>%
+  # Manual Curation / Quality Control
+  # 1. Technical: PANX1 is borderline. In the published Limma version, it is
+  #    statistically "unchanged" likely due to a minor software update affecting p-values.
+  # 2. Biological: CD3D & CD3E are T-cell specific markers. Since the CRISPR screen
+  #    was performed in melanoma cells, these should not be expressed/relevant.
+  filter(!Genes %in% c("PANX1", "CD3D", "CD3E")) %>%
+  mutate(Gene = gsub(";.*", "", Genes)) %>%
+  # Z-score Scaling (Per Protein, Per Patient)
+  # This normalizes baseline differences between patients
+  group_by(Protein.Group, Gene, patient) %>%
+  mutate(z_score = scale(PG.MaxLFQ, center = TRUE, scale = TRUE)) %>%
+  # Summarize mean Z-score per group
+  group_by(Protein.Group, Gene, patient, group) %>%
+  summarise(mean_z = mean(z_score, na.rm = TRUE), .groups = "drop")
+
+# 2. Define Heatmap Function
+plot_overlap_heatmap <- function(gene_list, title) {
+  # A. Pivot to Wide Format for Pheatmap
+  mat_data <- medium_scaled %>%
+    filter(Gene %in% gene_list) %>%
+    mutate(sample_id = paste0(patient, "_", group)) %>%
+    select(Gene, sample_id, mean_z) %>%
+    pivot_wider(names_from = sample_id, values_from = mean_z) %>%
+    column_to_rownames("Gene")
+  
+  # B. Define your custom column order
+  target_patients <- c("P605", "P905", "P915", "P924")
+  ordered_cols <- c(
+    paste0(target_patients, "_Control"),
+    # Block 1: Controls
+    paste0(target_patients, "_Co-culture")  # Block 2: Co-cultures
+  )
+  mat_data <- mat_data[, ordered_cols]
+  
+  # C. Prepare Annotations
+  anno_col <- data.frame(
+    Group = ifelse(grepl("Co-culture", colnames(mat_data)), "Co-culture", "Control"),
+    Patient = sub("_.*", "", colnames(mat_data))
+  )
+  rownames(anno_col) <- colnames(mat_data)
+  
+  # D. Colors
+  anno_colors <- list(
+    Group = c(
+      "Control" = "grey90",
+      "Co-culture" = "#386cb0"
+    ),
+    Patient = c(
+      "P605" = "#e7298a",
+      "P905" = "#1b9e77",
+      "P915" = "#d95f02",
+      "P924" = "#7570b3"
+    )
+  )
+  
+  # E. Plot
+  pheatmap(
+    mat_data,
+    color = colorRampPalette(rev(brewer.pal(11, "RdBu")))(100),
+    breaks = seq(-1.5, 1.5, length.out = 101),
+    cluster_cols = FALSE,
+    cluster_rows = TRUE,
+    annotation_col = anno_col,
+    annotation_colors = anno_colors,
+    show_rownames = TRUE,
+    main = title,
+    fontsize_row = 8
+  )
+}
+
+# 3. Extract Lists from Previous Results (e.g., Kearney)
+
+# Define "Concordant" hits (Up/Pos + Down/Neg)
+genes_concordant <- final_combined %>%
+  filter(Category %in% c("Up_Pos", "Down_Neg")) %>%
+  pull(Gene)
+
+# Define "Discordant" hits (Up/Neg + Down/Pos)
+genes_discordant <- final_combined %>%
+  filter(Category %in% c("Up_Neg", "Down_Pos")) %>%
+  pull(Gene)
+
+# 4. Generate Plots
+cat("Plotting Concordant Hits (n =", length(genes_concordant), ")\n")
+if (length(genes_concordant) > 2) {
+  plot_overlap_heatmap(genes_concordant, "Concordant Hits")
+}
+
+cat("Plotting Discordant Hits (n =", length(genes_discordant), ")\n")
+if (length(genes_discordant) > 2) {
+  plot_overlap_heatmap(genes_discordant, "Discordant Hits")
+}
+```
+
+## 6. CRISPR Rank Plot
+```{r crispr_rank}
+#| message: false
+#| warning: false
+#| fig.width: 6
+#| fig.height: 6
+
+# 1. Define Plotting Function
+plot_screen_targets <- function(file_path, title, score_col, rank_col, sig_col, threshold) {
+  
+  # A. Load & Clean Data
+  df <- fread(here(file_path)) %>% as.data.frame()
+  
+  # Standardize column names (handle | and -)
+  colnames(df) <- gsub("\\|", "_", colnames(df))
+  colnames(df) <- gsub("-", "_", colnames(df))
+  
+  # Standardize IDs
+  df$id <- toupper(df$id)
+  
+  # B. Handle Score & Rank
+  # Calculate -log10 Score
+  df$log_score <- -log10(df[[score_col]])
+
+  # C. Define Categories
+  targets <- c("JAK1", "PRKDC", "ATM", "CD274", "PDCD1LG2", "IDO1", "LGALS9")
+  
+  df <- df %>%
+    mutate(
+      category = case_when(
+        id %in% targets ~ "Target",
+        .data[[sig_col]] < threshold ~ "Significant",
+        TRUE ~ "NS"
+      ),
+      label_text = ifelse(category == "Target", id, NA)
+    ) %>%
+    # Sort order: NS first, then Sig, then Target (so red is on top)
+    arrange(factor(category, levels = c("NS", "Significant", "Target")))
+
+  # D. Plot
+  p <- ggplot(df, aes(x = df[[rank_col]], y = log_score, color = category, size = category)) +
+    geom_point(alpha = 0.6) +
+    # Custom Colors & Sizes
+    scale_color_manual(values = c(
+      "NS" = "grey85",          # Non-significant (Light Grey)
+      "Significant" = "black",  # Significant (Black)
+      "Target" = "red"          # Targets (Red)
+    )) +
+    scale_size_manual(values = c(
+      "NS" = 0.5, 
+      "Significant" = 0.5, 
+      "Target" = 2.5
+    )) +
+    # Labels for Targets
+    geom_text_repel(
+      aes(label = label_text),
+      size = 3.5, fontface = "bold", color = "red",
+      nudge_x = 1000, nudge_y = 0.5,
+      min.segment.length = 0,
+      max.overlaps = Inf,
+      show.legend = FALSE
+    ) +
+    theme_minimal(base_size = 14) +
+    labs(
+      title = paste("CRISPR Screen:", title),
+      y = paste("-Log10", score_col),
+      x = rank_col
+    )
+  print(p)
+}
+
+# 2. Run for Zhang (Uses FDR)
+plot_screen_targets(
+  file_path = "data/CRISPR/1-s2.0-S2666379122001872-mmc2.txt", 
+  title = "Zhang Negative Selection",
+  score_col = "neg.score",
+  rank_col = "neg.rank",
+  sig_col = "neg.fdr",
+  threshold = 0.05
+)
+
+plot_screen_targets(
+  file_path = "data/CRISPR/1-s2.0-S2666379122001872-mmc2.txt", 
+  title = "Zhang Positive Selection",
+  score_col = "pos.score",
+  rank_col = "pos.rank",
+  sig_col = "pos.fdr",
+  threshold = 0.05
+)
+
+# 3. Run for Kearney (Uses P-value)
+plot_screen_targets(
+  file_path = "data/CRISPR/Kearney_aar3451_table_s3.txt",
+  title = "Kearney Negative Selection",
+  score_col = "neg_score",
+  rank_col = "neg_rank",
+  sig_col = "neg_p_value",
+  threshold = 0.01
+)
+
+plot_screen_targets(
+  file_path = "data/CRISPR/Kearney_aar3451_table_s3.txt",
+  title = "Kearney Positive Selection",
+  score_col = "pos_score",
+  rank_col = "pos_rank",
+  sig_col = "pos_p_value",
+  threshold = 0.01
+)
+```
+
+
+
+
+
+
+
+
+

@@ -23,7 +23,6 @@ library(pheatmap)
 library(RColorBrewer)
 library(ggrepel)
 library(ggfortify)
-library(readr)
 library(eulerr)
 ```
 
@@ -488,6 +487,7 @@ column_to_rownames("Genes") %>%
 select(contains("Ctrl"), contains("IFNg")) %>%
 #keep rows with more than 50% values
 filter(rowSums(is.na(.)) < ncol(.) * 0.5)
+cat("Heatmap data dimensions:", dim(hm), "\n")
 
 # 3. Annotate columns
 # Extract Metadata from column names (cols 5 to end)

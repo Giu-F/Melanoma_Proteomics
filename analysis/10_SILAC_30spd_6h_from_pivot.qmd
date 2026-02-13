@@ -19,7 +19,6 @@ library(tidyverse)
 library(data.table)
 library(here)
 library(RColorBrewer)
-library(readr)
 library(knitr)
 library(eulerr)
 library(limma)
@@ -126,7 +125,7 @@ cutoff_stats <- limma_results %>%
   mutate(direction = ifelse(logFC > 0, "Up", "Down")) %>%
   group_by(Channel, direction) %>%
   summarise(
-    mad_val = 5 * mad(abs(logFC), center = median(abs(logFC))),
+    mad_val = 5 * mad(abs(logFC)),
     .groups = "drop"
   )
 
@@ -213,14 +212,24 @@ ggplot(limma_results, aes(x = logFC, fill = Channel)) +
 #| fig.width: 10
 #| fig.height: 8
 
-# 1. Create ID lists
+# 1. Load Presence/Absence SILAC proteome
+input_file_presence <- here("results", "SILAC_proteome", "presence_medium.txt")
+input_file_absence <- here("results", "SILAC_proteome", "absence_medium.txt")
+presence <- fread(input_file_presence)
+presence <- as.data.frame(presence)
+absence <- fread(input_file_absence)
+absence <- as.data.frame(absence)
+
+# 2. Create ID lists
 lists <- list(
   L_up   = limma_results$Protein.Group[limma_results$Channel == "L" & limma_results$Regulation == "Up"],
   L_down = limma_results$Protein.Group[limma_results$Channel == "L" & limma_results$Regulation == "Down"],
   H_up   = limma_results$Protein.Group[limma_results$Channel == "H" & limma_results$Regulation == "Up"],
   H_down = limma_results$Protein.Group[limma_results$Channel == "H" & limma_results$Regulation == "Down"],
   M_up   = limma_results$Protein.Group[limma_results$Channel == "M" & limma_results$P.Value <= 0.05 & limma_results$logFC > 0],
-  M_down = limma_results$Protein.Group[limma_results$Channel == "M" & limma_results$P.Value <= 0.05 & limma_results$logFC < 0]
+  M_down = limma_results$Protein.Group[limma_results$Channel == "M" & limma_results$P.Value <= 0.05 & limma_results$logFC < 0],
+  Presence = presence$Protein.Group,
+  Absence  = absence$Protein.Group
 )
 
 # 2. Plotting Function
@@ -230,14 +239,20 @@ make_euler <- function(keys, title) {
     quantities = TRUE,           # Keep numbers inside
     labels = FALSE,              # Remove text from inside
     legend = list(side = "right"), # Add text to the side
-    fills = c("lightblue", "lightpink", "lightgreen", "lightyellow"),
+    fills = c("lightblue", "lightpink", "lightgreen", "lightyellow", "lightgray", "lightcoral"),
     main = title
   )
 }
 
 # 3. Generate Plots
-make_euler(c("L_up", "L_down", "M_up", "M_down"), "Regulated proteins 6h L vs M")
-make_euler(c("H_up", "H_down", "M_up", "M_down"), "Regulated proteins 6h H vs M")
+make_euler(
+  c("L_up", "L_down", "M_up", "M_down", "Presence", "Absence"),
+  "Regulated proteins 6h L vs M"
+)
+make_euler(
+  c("H_up", "H_down", "M_up", "M_down", "Presence", "Absence"),
+  "Regulated proteins 6h H vs M"
+)
 ```
 
 ## 7. Save Differential Protein Degradation Candidates
