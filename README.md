@@ -7,7 +7,7 @@
 **A simplified, interactive web interface and reproducible analysis pipeline for complex proteomics datasets.**
 
 Developed by **Giulia Franciosa**, PhD  
-*Jesper V. Olsen Lab, CPR, University of Copenhagen*
+*Jesper V. Olsen Lab, Novo Nordisk Foundation Center for Protein Research (CPR), Department of Cellular and Molecular Medicine, University of Copenhagen*
 
 🔗 **[View Live Application](https://giu-f.github.io/Melanoma_Proteomics/)**
 
@@ -24,6 +24,7 @@ This project contains the source code and analysis pipeline for the study *"The 
 *(Screenshot of the visualization interface)*
 
 ---
+
 ### 📄 Read the Pre-print
 **[The Proteomics and Phosphoproteomics Landscape of Melanoma Under T Cell Attack](https://doi.org/10.1101/2025.09.12.675787)**  
 *Available now on bioRxiv* 🔬
@@ -39,6 +40,8 @@ The raw mass spectrometry proteomics data have been deposited to the ProteomeXch
 **PXD068650** (IFNG Stimulation Dataset)
 
 > **⚠️ Note on Access:** The raw data are currently **private/under embargo** and will be released publicly upon peer-reviewed publication. The code in this repository is shared for transparency and peer review. Once the data is released, you can place the files in the `data/` folder to fully reproduce the analysis.
+
+The complete output of this analysis pipeline, including all processed data, is publicly accessible on Zenodo at https://doi.org/10.5281/zenodo.18647598.
 
 ---
 
@@ -68,7 +71,7 @@ The easiest way is to use RStudio:
   `https://github.com/Giu-F/Melanoma_Proteomics.git`
 * Click **Create Project**.
 
-**2. Install Dependencies**
+**2. Install Dependencies**  
 This project uses a `DESCRIPTION` file to ensure you have the exact packages needed. Run this command in the RStudio **Console**:
 ```r
 # Install the devtools package if you don't have it
@@ -77,10 +80,11 @@ if (!require("devtools")) install.packages("devtools")
 # Install all project dependencies
 devtools::install_deps()
 ```
-3.  **Run the Report:**
-    * Open the Quarto analysis file.
-    * Click the **Render** button in RStudio.
-    * The final HTML report will be generated in the `analysis/` folder.
+**3. Run the Report:**
+* **Important**: Ensure that the necessary output directories (e.g., ```analysis/```, ```results/```) have been created in your working directory.
+* Open the Quarto analysis file.
+* Click the **Render** button in RStudio.
+* The final HTML report will be generated in the `analysis/` folder.
 
 ---
 
@@ -123,9 +127,3 @@ This application is hosted via **GitHub Pages**. Because it is a static site, th
 
 ## 📜 License
 Distributed under the **MIT License**. See `LICENSE` for more information.
-
-## 📬 Contact & Credits
-**Giulia Franciosa, PhD**
-
-**Jesper V. Olsen Lab** Novo Nordisk Foundation Center for Protein Research (CPR)  
-University of Copenhagen
