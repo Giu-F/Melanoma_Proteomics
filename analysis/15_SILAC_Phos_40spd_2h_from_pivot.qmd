@@ -487,7 +487,7 @@ ggplot(limma_results, aes(x = logFC, fill = Channel)) +
 ```{r heatmap-significant}
 #| message: false
 #| warning: false
-#| fig.width: 8
+#| fig.width: 10
 #| fig.height: 10
 
 # 1. Filter & Clean Data
@@ -576,6 +576,14 @@ final_order <- intersect(target_order, colnames(mat_hm))
 
 # Reorder Matrix
 mat_hm <- mat_hm[, final_order]
+
+# Define Annotation columns
+anno_col <- data.frame(
+  Group = ifelse(grepl("Co-", colnames(mat_hm)), "Co-culture", "Control"),
+  Channel = ifelse(grepl("_H$", colnames(mat_hm)), "H", "L"),
+  Patient = sub(".*_(P\\d+)_.*", "\\1", colnames(mat_hm))
+)
+rownames(anno_col) <- colnames(mat_hm)
 
 # Define Annotation Colors
 anno_colors <- list(

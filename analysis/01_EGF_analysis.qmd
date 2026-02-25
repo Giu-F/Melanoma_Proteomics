@@ -68,6 +68,10 @@ logdata[logdata == -Inf] <- NA
 # 6. Preview the cleaned data
 cat("Cleaned data dimensions:", dim(logdata), "\n")
 glimpse(logdata)
+
+# 7. Save data
+output_dir <- here("results", "EGF")
+write_tsv(logdata, file.path(output_dir, "logdata.tsv"))
 ```
 
 ## 4. Plot Identification Rates
@@ -313,6 +317,9 @@ for (i in 1:length(contrast_names)) {
 # Combine all results into one master table
 limma_results <- do.call(rbind, list_tab)
 limma_results$contrast <- factor(limma_results$contrast, levels = contrast_names)
+
+# Save data
+write_tsv(limma_results, file.path(output_dir, "limma_results.tsv"))
 
 # --- PART C: Summary Plot ---
 
@@ -602,6 +609,9 @@ PI_res  <- load_ptm_data(files$PI, "PI")
 
 # 2. Combine
 ptm_all <- rbind(IL_res, PBS_res, PI_res)
+
+# Save data
+write_tsv(ptm_all, file.path(output_dir, "ptmsea_results.tsv"))
 
 # 3. Plot 1: Overall Count of Regulated Pathways
 count_pathways <- ptm_all %>% 

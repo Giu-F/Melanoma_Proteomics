@@ -42,6 +42,7 @@ input_path <- here("data", "SILAC_Proteome", params$subfolder, "report.parquet")
 
 # 2. Read the file and clean the data
 report <- clean_diann_data(input_path)
+cat("Number of rows:", nrow(report), "\n")
 ```
 
 ## 3. Data renaming and add metadata

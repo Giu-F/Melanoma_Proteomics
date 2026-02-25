@@ -35,7 +35,9 @@ prot_2h <- read_tsv(here("results/SILAC_proteome/Prot_30spd_4patients_2h/PG.MaxL
 
 # Create Filter Lists (Genes detected in H-0h OR M-2h / L-0h OR M-2h)
 valid_genes_H <- union(prot_0h$Genes[prot_0h$Channel == "H"], prot_2h$Genes[prot_2h$Channel == "M"])
+cat("Proteome ids for H Channel:", length(valid_genes_H), "\n")
 valid_genes_L <- union(prot_0h$Genes[prot_0h$Channel == "L"], prot_2h$Genes[prot_2h$Channel == "M"])
+cat("Proteome ids for L Channel:", length(valid_genes_L), "\n")
 ```
 
 # 3. PEA gcr
@@ -77,12 +79,18 @@ df_pea <- map_dfr(pea_files, function(file) {
     select(Signature.ID, Score, adj.p.val, Percent.Overlap, TCL, Channel)
 })
 
+# Export combined PEA
+write.csv(df_pea, here("results/SILAC_Phos/PTMNavigator/combined_PEA_gcr.csv"), row.names = FALSE)
+
 # 2. Scatter H vs L
 # Keep signature if significant (adj.p <= 0.05) in AT LEAST one sample
 sig_pathways <- df_pea %>%
   group_by(Signature.ID) %>%
   filter(any(adj.p.val <= 0.05)) %>%
   ungroup()
+
+# Export combined PEA filtered
+write.csv(sig_pathways, here("results/SILAC_Phos/PTMNavigator/combined_PEA_gcr_significant.csv"), row.names = FALSE)
 
 # Scatter Plot Prep: Sum scores per channel
 score_wide <- sig_pathways %>%
@@ -141,16 +149,16 @@ lm_model <- lm(L ~ H, data = score_wide)
 summary(lm_model)
 
 # 3. Heatmap Prep (Top 20 most significant per channel)
-df_pea <- df_pea %>%
+sig_pathways <- sig_pathways %>%
   mutate(fdr_score = -log10(adj.p.val))
 
-top_H <- df_pea %>% 
+top_H <- sig_pathways %>% 
   filter(Channel == "H") %>% 
   group_by(Signature.ID) %>% 
   summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
   slice_max(sum_fdr, n = 20)
 
-top_L <- df_pea %>% 
+top_L <- sig_pathways %>% 
   filter(Channel == "L") %>% 
   group_by(Signature.ID) %>% 
   summarise(sum_fdr = sum(fdr_score), .groups = "drop") %>% 
@@ -160,7 +168,7 @@ plot_pathways <- unique(c(top_H$Signature.ID, top_L$Signature.ID))
 cat("Top Pathways for Heatmap:", length(plot_pathways), "\n")
 
 # Heatmap Data
-df_pea_hm <- df_pea %>%
+df_pea_hm <- sig_pathways %>%
   filter(Signature.ID %in% plot_pathways) %>%
   mutate(
     TCL_Channel = paste(TCL, Channel, sep = "_"),
@@ -235,16 +243,37 @@ df_ptm <- map_dfr(ptm_files, function(file) {
       #Keep text after / if present (e.g. "MAPK1/MAPK3" -> "MAPK3")
       gene = sub(".*/", "", kinase),
       #remove text before _
-      gene = sub(".*_", "", gene)
+      gene = sub(".*_", "", gene),
+      #remove text after .
+      gene = sub("\\..*", "", gene)
     )
 })
+cat("Total unique kinase signatures:", length(unique(df_ptm$Signature.ID)), "\n")
+cat("Total unique kinases:", length(unique(df_ptm$gene)), "\n")
 
-# 2. Filter by Proteome (Only keep kinases detected in protein data)
+# Export combined PTM-SEA
+write.csv(df_ptm, here("results/SILAC_Phos/PTMNavigator/combined_PTMSEA.csv"), row.names = FALSE)
+
+# 2. Filter PTM-SEA data
+
+# Keep kinase if significant (adj.p <= 0.05) in AT LEAST one sample
 df_ptm_filt <- df_ptm %>%
+  group_by(Signature.ID) %>%
+  filter(any(adj.p.val <= 0.05)) %>%
+  ungroup()
+
+# Keep kinases detected in protein data
+df_ptm_filt <- df_ptm_filt %>%
   filter(
     (Channel == "H" & gene %in% valid_genes_H) |
     (Channel == "L" & gene %in% valid_genes_L)
   )
+
+cat("Total unique kinase signatures after filtering:", length(unique(df_ptm_filt$Signature.ID)), "\n")
+cat("Total unique kinases after filtering:", length(unique(df_ptm_filt$gene)), "\n")
+
+# Export combined PTM-SEA filtered
+write.csv(df_ptm_filt, here("results/SILAC_Phos/PTMNavigator/combined_PTMSEA_significant.csv"), row.names = FALSE)
 
 # 3. Select Top Kinases (Top 20 per channel by FDR)
 df_ptm_filt <- df_ptm_filt %>% mutate(fdr_score = -log10(adj.p.val))
@@ -262,9 +291,9 @@ top_k_L <- df_ptm_filt %>%
   slice_max(sum_fdr, n = 20)
 
 target_kinases <- unique(c(top_k_H$kinase, top_k_L$kinase))
-cat("Top Kinases:", length(target_kinases), "\n")
+cat("Top kinase signatures:", length(target_kinases), "\n")
 target_genes <- unique(c(top_k_H$gene, top_k_L$gene))
-cat("Top Genes:", length(target_genes), "\n")
+cat("Top Kinases:", length(target_genes), "\n")
 
 # 4. Heatmap
 df_ptm_hm <- df_ptm_filt %>%
@@ -318,13 +347,35 @@ df_rokai <- map_dfr(rokai_files, function(file) {
   read.csv(file) %>%
     mutate(TCL = parts[1], Channel = parts[2])
 })
+cat("Total unique kinases:", length(unique(df_rokai$Name)), "\n")
 
-# 2. Filter by Proteome (Only keep kinases detected in protein data)
+# Export combined RoKAI
+write.csv(df_rokai, here("results/SILAC_Phos/RoKAI/combined_RoKAI_kinase_table.csv"), row.names = FALSE)
+
+# 2. Filter RoKAI data
+
+# Keep kinases if significant (adj.p <= 0.05) in AT LEAST one sample
 df_rokai_filt <- df_rokai %>%
+  group_by(Name) %>%
+  filter(any(FDR <= 0.05)) %>%
+  ungroup()
+
+# Keep kinases with at least 2 substrates in AT LEAST one sample
+df_rokai_filt <- df_rokai_filt %>%
+  group_by(Name) %>%
+  filter(any(NumSubs >= 2)) %>%
+  ungroup()
+
+# Keep kinases detected in protein data
+df_rokai_filt <- df_rokai_filt %>%
   filter(
-    (Channel == "H" & (Gene %in% valid_genes_H)) |  # Use 'Name' if 'Gene' doesn't exist
+    (Channel == "H" & (Gene %in% valid_genes_H)) |
     (Channel == "L" & (Gene %in% valid_genes_L))
   )
+cat("Total unique kinases after filtering:", length(unique(df_rokai_filt$Name)), "\n")
+
+# Export combined PTM-SEA filtered
+write.csv(df_rokai_filt, here("results/SILAC_Phos/RoKAI/combined_RoKAI_kinase_table_significant.csv"), row.names = FALSE)
 
 # 3. Select Top Kinases (Top 10 per channel by FDR)
 df_rokai_filt <- df_rokai_filt %>% mutate(fdr_score = -log10(FDR))
@@ -342,7 +393,7 @@ top_r_L <- df_rokai_filt %>%
   slice_max(sum_fdr, n = 10)
 
 rokai_targets <- unique(c(top_r_H$Name, top_r_L$Name))
-cat("Top RoKAI Kinases:", length(rokai_targets), "\n")
+cat("Top Kinases:", length(rokai_targets), "\n")
 
 # 4. Heatmap score
 df_rokai_hm <- df_rokai_filt %>%
