@@ -15,7 +15,10 @@ _cache/
 data/
 results/EGF/
 results/SILAC_Proteome/
-results/SILAC_Phos/
+results/SILAC_Phos/*
+!results/SILAC_Phos/pSTYA/
+results/SILAC_Phos/pSTYA/*
+!results/SILAC_Phos/pSTYA/N_counts_predicted_library.csv
 results/IFNG/
 results/CRISPR/
 

@@ -1,0 +1,463 @@
+---
+title: "SILAC-DIA Phospho with Phospho Alanine"
+author: "Giulia Franciosa"
+date: "2024-06-17"
+format: 
+  html:
+    embed-resources: true
+    theme: cosmo
+    code-fold: true
+    toc: true
+---
+
+## 1. Setup and load libraries
+```{r setup}
+#| message: false
+#| warning: false
+
+# 1. Load standard analysis libraries
+library(here)
+library(tidyverse)
+library(arrow)
+library(RColorBrewer)
+library(knitr)
+library(data.table)
+library(ggrepel)
+
+# 2. Define input folder
+input_path <- here("data", "SILAC_Phos", "pSTYA", "report.parquet")
+
+# 3. Load the functions
+source(here("R", "clean_diann_report_phos.R"))
+source(here("R", "expand_phospho_report_pSTYA.R"))
+```
+
+## 2. Load and clean the data
+```{r load-data}
+#| message: true
+#| warning: false
+#| results: "markup"
+
+report <- clean_diann_phos_data(input_path)
+```
+
+## 3. Report renaming and add metadata
+```{r data-specific-renaming}
+#| message: false
+#| warning: false
+
+# 1. Clean Run Names
+report$Run <- sub("^.*Human_", "", report$Run)
+
+#Add T before 05
+report$Run <- sub("05", "T05", report$Run)
+
+cat("Number of unique Runs:\n")
+cat(length(unique(report$Run)), "\n")
+
+# 2. Add metadata columns in report
+report$group <- ifelse(grepl("Ratio11", report$Run), "Mix_H_L", "Only_L")
+cat("Unique groups:\n")
+unique(report$group)
+
+# 3. Save filtered data
+output_dir <- here("results", "SILAC_Phos", "pSTYA")
+arrow::write_parquet(report, file.path(output_dir, "report_filtered.parquet"))
+```
+
+## 4. Expand phospho report
+```{r expand-phospho-report}
+#| message: true
+#| warning: false
+#| results: "markup"
+
+report_expanded <- expand_phospho_report(report)
+cat("Dimensions of the expanded phospho report data:\n")
+cat(dim(report_expanded), "\n")
+
+#save the expanded report
+arrow::write_parquet(report_expanded, file.path(output_dir, "report_expanded.parquet"))
+```
+
+## 5. Phosphosite Count
+```{r phosphosite-count}
+#| message: false
+#| warning: false
+#| results: "markup"
+#| fig.width: 8
+#| fig.height: 6
+
+# 1. Add residue info
+report_site <- report_expanded %>%
+  # Add amino acid column by extracting the first letter of the site string (which is the amino acid)
+  mutate(aa = substr(site, 1, 1)) %>%
+  # If Residue is STY, write "STY", otherwise keep the original residue (which will be A for decoys)
+  mutate(residue = ifelse(aa %in% c("S", "T", "Y"), "STY", aa))
+
+# 2 Count phosphosites by localization probability thresholds
+
+# A. Create a function to calculate phosphosites count for a given threshold
+count_func <- function(data, threshold) {
+  data %>%
+    filter(loc.prob >= threshold) %>%
+    group_by(Channel, group, Run, aa) %>%
+    summarise(n = n_distinct(psite.id), .groups = "drop")
+}
+
+# B. Define thresholds
+thresholds <- c("all" = 0, "0.75" = 0.75, "0.90" = 0.90, "0.99" = 0.99)
+
+# C. Run the function for each threshold
+count_list <- lapply(names(thresholds), function(t_name) {
+  count_func(report_site, thresholds[[t_name]]) %>%
+    mutate(
+      localization = t_name,
+      residue = ifelse(aa %in% c("S", "T", "Y"), "STY", aa)
+    )
+})
+
+# D. Combine into one data frame
+ps_loc <- bind_rows(count_list)
+ps_loc$localization <- factor(ps_loc$localization, levels = c("all", "0.75", "0.90", "0.99"))
+
+# E. Calculate mean and st.dev
+ps_count_summary <- ps_loc %>% 
+  group_by(localization, Channel, group, residue, aa) %>%
+  summarise(
+    mean = mean(n, na.rm = TRUE), 
+    st.dev = sd(n, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(Channel = factor(Channel, levels = c("L", "M", "H"))) %>%
+  # Complete the grid to ensure no missing bars
+  complete(localization, Channel, group, nesting(residue, aa), 
+           fill = list(mean = 0, st.dev = 0))
+
+# F. Calculate Totals for Labels (So they don't stack/overlap)
+total_labels <- ps_count_summary %>%
+  filter(group == "Only_L") %>%
+  group_by(localization, Channel, group, residue) %>%
+  summarise(total_mean = sum(mean), .groups = "drop")
+
+# 3. Plot Psite Count
+
+# A. Version with aa as the grouping variable (S, T, Y vs A)
+p_aa <- ggplot(ps_count_summary, aes(x = group, y = mean, fill = Channel)) +
+  geom_bar(
+    stat = "identity", 
+    position = position_dodge(width = 0.9), 
+    color = "black",
+    width = 0.7,
+    lwd = 0.2
+  ) +
+  geom_errorbar(
+    aes(ymin = ifelse(mean - st.dev < 0, 0, mean - st.dev), 
+        ymax = mean + st.dev),
+    position = position_dodge(width = 0.9), 
+    width = 0.2,
+    color = "black"
+  ) +
+  geom_text(
+    aes(y = mean + st.dev, label = round(mean, 0)),
+    vjust = -0.5, # Moves text slightly above the point defined in 'y'
+    size = 3,
+    position = position_dodge(width = 0.9)
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal(base_size = 12) +
+  facet_grid(aa ~ localization, scales = "free_y") +
+  labs(
+    title = "Phosphosite count by amino acid and localization threshold",
+    y = "Psite ID Count",
+    x = ""
+  ) +
+  theme(
+    strip.text = element_text(size = 11, face = "bold"),
+    panel.border = element_rect(color = "black", fill = NA, size = 0.5),
+    legend.position = "top"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+print(p_aa)
+
+# B. Version with residue as the grouping variable (STY vs A)
+ps_count_summary$aa <- factor(ps_count_summary$aa, levels = c("Y", "T", "S", "A"))
+p_residue <- ggplot(ps_count_summary %>% filter(group == "Only_L"),
+                    aes(x = Channel, y = mean, fill = aa)) +
+  geom_bar(
+    stat = "identity",
+    position = "stack",
+    color = "black",
+    width = 0.7,
+    lwd = 0.2
+  ) +
+  geom_text(
+    aes(label = ifelse(mean > 0, round(mean, 0), "")),
+    position = position_stack(vjust = 0.5),
+    size = 3,
+    color = "black"
+  ) +
+  geom_text(
+    data = total_labels,
+    aes(
+      x = Channel,
+      y = total_mean,
+      label = round(total_mean, 0),
+      fill = NULL
+    ),
+    vjust = -0.5,
+    size = 3,
+    color = "darkblue"
+  ) +
+  scale_fill_brewer(palette = "Set2") +
+  theme_minimal(base_size = 12) +
+  facet_grid(residue ~ localization, scales = "free_y") +
+  labs(title = "Phosphosite count by residue group and localization threshold (Only_L)",
+       y = "Psite ID Count", 
+       x = "") +
+  theme(
+    strip.text = element_text(size = 11, face = "bold"),
+    panel.border = element_rect(
+      color = "black",
+      fill = NA,
+      size = 0.5
+    ),
+    legend.position = "top"
+  ) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15)))
+print(p_residue)
+```
+
+## 6. Count N_target and N_decoy from predicted library
+```{r correction}
+#| message: false
+#| warning: false
+#| eval: false
+
+# NOTE: The library is too large for GitHub or Proteome Exchange
+# This code is shown for reproducibility
+# The output (N_counts_predicted_library.csv) is already included in the repo
+
+# 1. Load the predicted library (User: Update this path if re-running)
+lib_path <- "path/to/your/predicted_pSTYA.parquet"
+predicted_lib <- arrow::open_dataset(lib_path, format = "parquet")
+
+# 2. Count N_target and N_decoy
+n_counts <- predicted_lib %>%
+  select(Precursor.Id) %>%
+  mutate(
+    is_pA = grepl("A\\(UniMod:21\\)", Precursor.Id),
+    is_pSTY = grepl("[STY]\\(UniMod:21\\)", Precursor.Id)
+  ) %>%
+  summarize(
+    N_decoy = sum(is_pA, na.rm = TRUE),
+    N_target = sum(is_pSTY, na.rm = TRUE)
+  ) %>%
+  collect()
+
+# 3. Save n_counts
+write.csv(n_counts, "N_counts_predicted_library.csv", row.names = FALSE)
+```
+
+## 7. Calculate The False Localization Rate (FLR)
+```{r FLR}
+#| message: false
+#| warning: false
+
+# 1. Load correction factors
+n_counts <- read.csv(file.path(output_dir, "N_counts_predicted_library.csv"))
+cat("Counts of N_decoy and N_target in the predicted library:\n")
+print(n_counts)
+
+# 2. Calculate Correction Factor
+correction_factor <- (n_counts$N_decoy + n_counts$N_target) / n_counts$N_decoy
+cat("Correction factor calculated from the predicted library:\n")
+print(correction_factor)
+
+# 3. Precursor Count (Identified Target and Decoy hits)
+
+# A. Define counting function
+calculate_hits <- function(data, threshold) {
+  data %>%
+    filter(loc.prob >= threshold) %>%
+    # Extract residue from psite.id
+    mutate(residue = substr(site, 1, 1)) %>%
+    group_by(Channel, group, residue) %>%
+    summarise(hits = n_distinct(Precursor.Id), .groups = "drop")
+}
+
+# B. Define thresholds
+thresholds <- c("all" = 0, "0.75" = 0.75, "0.90" = 0.90, "0.99" = 0.99)
+
+# C. Run phospho precursor counts for each bin and store results in a list 
+results_list <- lapply(names(thresholds), function(name) {
+  calculate_hits(report_expanded, thresholds[[name]]) %>%
+    mutate(localization_threshold = name)
+})
+
+# 4. Calculate FLR
+final_flr_table <- bind_rows(results_list) %>%
+  mutate(type = ifelse(residue == "A", "Decoy", "Target")) %>%
+  group_by(localization_threshold, Channel, group, type) %>%
+  summarise(count = sum(hits), .groups = "drop") %>%
+  pivot_wider(names_from = type,
+              values_from = count,
+              values_fill = 0) %>%
+  mutate(
+    Raw_Error_Rate = Decoy / (Target + Decoy),
+    Raw_Error_Rate_Percent = Raw_Error_Rate * 100,
+    Adjusted_FLR_Percent = (correction_factor * Raw_Error_Rate) * 100,
+    localization_threshold = factor(localization_threshold, levels = c("all", "0.75", "0.90", "0.99"))
+  ) %>%
+  arrange(localization_threshold, Channel, group)
+
+cat("False Localization Rate (FLR) at each localization threshold:\n")
+print(final_flr_table %>% select(localization_threshold, Channel, group, Raw_Error_Rate_Percent, Adjusted_FLR_Percent), n = Inf, width = Inf)
+
+# 5. Export to CSV
+write.csv(final_flr_table, file.path(output_dir, "Localization_FLR.csv"), row.names = FALSE)
+```
+
+## 8. Cumulative Distribution Function (CDF) of localization probabilities
+```{r CDF}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 6
+
+# 1. Aggregate site by run
+plot_data <- report_site %>%
+  group_by(Channel, group, aa, psite.id) %>%
+  summarize(max_prob = max(loc.prob, na.rm = TRUE), .groups = "drop") %>%
+# 2. Calculate the rank/percentage for each residue group
+  group_by(group, aa, Channel) %>%
+  arrange(max_prob) %>%
+  mutate(cum_prop = (row_number() / n()) * 100)
+
+# 3. Create the plot
+p <- ggplot(plot_data, aes(x = cum_prop, y = max_prob, color = aa)) +
+  geom_line(size = 1.2) +
+  scale_color_manual(values = c("S" = "#4A69BD", "T" = "#78909C", 
+                                "Y" = "#D1D8E0", "A" = "#B71C1C")) +
+  labs(x = "Identified Phosphosites, %",
+       y = "Localization Probability",
+       color = "Amino acids:") +
+  theme_minimal(base_size = 12) +
+  facet_grid(group ~ Channel) +
+  geom_hline(yintercept = c(0.5, 1.0), linetype = "dashed", color = "grey80")
+print(p)
+```
+
+## 9. Plot FLR vs Target ID Continuous Curve
+```{r plot-flr-curve-continuous}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 6
+
+# 1. Create a fine grid of 100 thresholds (0.00 to 0.99)
+smooth_thresholds <- seq(0, 0.99, by = 0.01)
+
+# 2. Calculate hits for every single threshold to create a smooth line
+smooth_list <- lapply(smooth_thresholds, function(t) {
+  # Reusing your existing calculate_hits function
+  calculate_hits(report_expanded, t) %>%
+    mutate(loc_prob = t) # Store the numeric probability
+})
+
+# 3. Calculate the FLR for the smooth curve
+smooth_flr_table <- bind_rows(smooth_list) %>%
+  mutate(type = ifelse(residue == "A", "Decoy", "Target")) %>%
+  group_by(loc_prob, Channel, group, type) %>%
+  summarise(count = sum(hits), .groups = "drop") %>%
+  pivot_wider(names_from = type, values_from = count, values_fill = 0) %>%
+  # Fill NAs with 0 in case some thresholds have no Decoys or Targets left
+  mutate(
+    Target = replace_na(Target, 0),
+    Decoy = replace_na(Decoy, 0),
+    Raw_Error_Rate = ifelse((Target + Decoy) == 0, 0, Decoy / (Target + Decoy)),
+    # correction_factor is carried over from Chunk 7
+    Adjusted_FLR_Percent = (correction_factor * Raw_Error_Rate) * 100
+  )
+
+# 5. Create a specific column for the labels to plot
+smooth_flr_table <- smooth_flr_table %>%
+  mutate(
+    label_text = case_when(
+      round(loc_prob, 2) == 0.00 ~ "No cutoff",
+      round(loc_prob, 2) == 0.75 ~ "0.75",
+      round(loc_prob, 2) == 0.90 ~ "0.9",
+      round(loc_prob, 2) == 0.99 ~ "0.99",
+      TRUE ~ "" # Leave all other points blank so they don't print text
+    )
+  )
+
+# Extract JUST the labeled points to draw lines and text
+labels_data <- smooth_flr_table %>% filter(label_text != "")
+
+# 6. Plot the curve
+p_smooth_curve <- ggplot(smooth_flr_table, aes(x = Adjusted_FLR_Percent, y = Target, color = Channel)) +
+  # A. The continuous line
+  geom_line(linewidth = 1) +
+  
+  # B. Vertical dashed lines dropping to the x-axis
+  geom_segment(
+    data = labels_data,
+    aes(
+      x = Adjusted_FLR_Percent, xend = Adjusted_FLR_Percent,
+      y = 0, yend = Target, color = Channel
+    ),
+    linetype = "dashed", alpha = 0.6, show.legend = FALSE
+  ) +
+  
+  # C. The dots on the curve
+  geom_point(data = labels_data, size = 3) +
+  
+  # D. Top Labels (Probability Thresholds)
+  geom_text_repel(
+    data = labels_data,
+    aes(label = label_text),
+    size = 4,
+    nudge_y = max(smooth_flr_table$Target, na.rm = TRUE) * 0.08,
+    show.legend = FALSE,
+    color = "black"
+  ) +
+  
+  # E. Bottom Labels
+  geom_text_repel(
+    data = labels_data,
+    aes(
+      x = Adjusted_FLR_Percent,
+      y = 0,
+      label = paste0(round(Adjusted_FLR_Percent, 2), "%"),
+      color = Channel
+    ),
+    size = 3.5,
+    angle = 90,
+    hjust = -0.2,
+    direction = "x",
+    nudge_x = -0.15,
+    segment.color = "grey50",
+    segment.size = 0.3,
+    min.segment.length = 0,
+    show.legend = FALSE
+  ) +
+  
+  # F. Layout and Styling
+  facet_wrap(~ group, scales = "free_y") +
+  theme_minimal(base_size = 14) +
+  scale_color_brewer(palette = "Set2") +
+  expand_limits(y = 0) + 
+  coord_cartesian(xlim = c(0, 5)) + 
+  labs(
+    title = "Identified Targets vs. False Localization Rate", 
+    x = "Adjusted FLR [%]", 
+    y = "Phosphosite IDs"
+  ) +
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.5),
+    strip.text = element_text(size = 12, face = "bold"),
+    legend.position = "top"
+  )
+print(p_smooth_curve)
+```
+
