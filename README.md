@@ -37,9 +37,7 @@ The raw mass spectrometry proteomics data have been deposited to the ProteomeXch
 
 **PXD068403** (EGF Stimulation Dataset)  
 **PXD068582** (Melanoma Co-culture Dataset)  
-**PXD068650** (IFNG Stimulation Dataset)
-
-> **⚠️ Note on Access:** The raw data are currently **private/under embargo** and will be released publicly upon peer-reviewed publication. The code in this repository is shared for transparency and peer review. Once the data is released, you can place the files in the `data/` folder to fully reproduce the analysis.
+**PXD068650** (IFNG Stimulation Dataset)  
 
 The complete output of this analysis pipeline, including all processed data, is publicly accessible on Zenodo at https://doi.org/10.5281/zenodo.18647598.
 
