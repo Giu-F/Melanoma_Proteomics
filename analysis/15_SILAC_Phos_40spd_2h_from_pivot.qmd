@@ -209,7 +209,6 @@ cat("Melt dimensions after removing medium channel:", dim(melt), "\n")
 #| warning: false
 
 # 1. Identify Column Groups dynamically
-#    Using grepl ensures we find the right columns even if their order changes
 cols_co <- grepl("Co_", colnames(data), fixed = TRUE)
 cols_ctrl <- grepl("Ctrl_", colnames(data), fixed = TRUE)
 
@@ -232,7 +231,6 @@ presence_status <- case_when(
 
 # 5. Create Final Dataframe
 #    We bind the metadata columns (assumed to be 1:10) with the new status
-#    Note: adjusting 1:10 to whatever your metadata columns actually are is safer
 meta_cols <- 1:10 
 df_presence <- cbind(data[, meta_cols], Status = presence_status)
 
@@ -249,7 +247,69 @@ output_file <- here("results", "SILAC_Phos", "Presence_absence.txt")
 write_tsv(df_final, output_file)
 ```
 
-## 9. Heatmaps of Relative Intensity (Centered)
+## 9. Heatmap of PRKDC sites present exclusevely in the co-culture
+```{r hm-presence-PRKDC}
+#| message: false
+#| warning: false
+#| fig.height: 8
+#| fig.width: 10
+
+# 1. Filter for PRKDC and apply presence/absence logic specifically
+presence_PRKDC <- data %>% 
+  filter(Genes == "PRKDC") %>%
+  mutate(presence = case_when(
+    rowSums(!is.na(.[, cols_co])) >= n_present & rowSums(!is.na(.[, cols_ctrl])) <= n_absent ~ "up",
+    TRUE ~ NA_character_
+  )) %>%
+  filter(!is.na(presence))
+
+# 2. Reorganize columns: Metadata (1:10), then Control, then Co-culture
+presence_plot <- cbind(
+  presence_PRKDC[, 1:10], 
+  presence_PRKDC[, cols_ctrl], 
+  presence_PRKDC[, cols_co]
+)
+
+# 3. Process Heavy Channel (H)
+hm_H <- presence_plot %>% filter(Channel == "H")
+
+# Set row names for heatmap labeling
+rownames(hm_H) <- hm_H$gene_site
+
+# Isolate numeric data for heatmap (Columns 11 onwards)
+hm_matrix <- as.matrix(hm_H[, 11:ncol(hm_H)])
+
+# Define color breaks based on actual data range
+# We use 0 as the bottom for 'Absence'
+max_val <- max(hm_matrix, na.rm = TRUE)
+min_val <- min(hm_matrix, na.rm = TRUE)
+breaks_H <- seq(min_val, max_val, length.out = 51)
+
+# Fill NAs with 0 to represent absence visually
+hm_matrix[is.na(hm_matrix)] <- 0
+
+# 4. Define Annotations
+anno_col <- data.frame(
+  Group = ifelse(grepl("Co_", colnames(hm_matrix), fixed = TRUE), "Co-culture", "Control"),
+  Patient = sub("_.*", "", colnames(hm_matrix))
+)
+rownames(anno_col) <- colnames(hm_matrix)
+
+# 5. Plotting
+pheatmap(
+  hm_matrix,
+  color = colorRampPalette(brewer.pal(n = 9, name = "Blues"))(50),
+  cluster_cols = FALSE,
+  cluster_rows = TRUE,
+  fontsize_row = 8,
+  angle_col = 90,
+  annotation_col = anno_col,
+  main = "PRKDC Presence/Absence (Heavy Channel)",
+  breaks = breaks_H
+)
+```
+
+## 10. Heatmaps of Relative Intensity (Centered)
 ```{r heatmaps}
 #| message: false
 #| warning: false
@@ -320,7 +380,7 @@ for (ch in channels) {
 }
 ```
 
-## 10. Differential Expression Analysis with Limma
+## 11. Differential Expression Analysis with Limma
 ```{r differential-expression}
 #| message: false
 #| warning: false
@@ -434,7 +494,7 @@ output_file <- here("results", "SILAC_Phos", "SILAC_Phos_40spd_4patients_2h_Limm
 write_tsv(limma_results, output_file)
 ```
 
-## 11. Count significantly regulated phosphosites
+## 12. Count significantly regulated phosphosites
 ```{r count}
 #| message: false
 #| warning: false
@@ -459,7 +519,7 @@ ggplot(count %>% filter(Regulation != "Unchanged"), aes(x = Channel, y = n, fill
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 ```
 
-## 12. Density plot of logfc
+## 13. Density plot of logfc
 ```{r density-plot}
 #| message: false
 #| warning: false
@@ -483,11 +543,11 @@ ggplot(limma_results, aes(x = logFC, fill = Channel)) +
   theme_minimal(base_size = 12)
 ```
 
-## 13. Heatmap of significant phosphosites
+## 14. Heatmap of significant phosphosites
 ```{r heatmap-significant}
 #| message: false
 #| warning: false
-#| fig.width: 10
+#| fig.width: 6
 #| fig.height: 10
 
 # 1. Filter & Clean Data
@@ -608,7 +668,83 @@ pheatmap(
 )
 ```
 
-## 14. Differential regulation analysis (H vs L)
+## 15. Heatmap of significant phosphosites from PRKDC
+```{r heatmap-significant-PRKDC}
+#| message: false
+#| warning: false
+#| fig.width: 8
+#| fig.height: 6
+
+# 1. Filter existing long data for PRKDC and Limma significance
+PRKDC_long <- melt %>% 
+  filter(
+    Genes == "PRKDC",
+    psite.id %in% limma_results$psite.id[limma_results$P.Value < 0.05]
+  )
+
+# 2. Z-score calculation & Matrix Formatting
+# Scaling within each site and channel across samples
+hm_data <- PRKDC_long %>%
+  group_by(gene_site, Channel, patient) %>%
+  mutate(z_score = scale(Log2_Intensity, center = T, scale = T)) %>%
+  group_by(psite.id, gene_site, Channel, patient, group) %>%
+  summarise(z_score = mean(z_score, na.rm = TRUE), .groups = "drop") %>%
+  mutate(col_name = paste(group, patient, Channel, sep = "_")) %>%
+  select(gene_site, col_name, z_score) %>%
+  pivot_wider(names_from = col_name, values_from = z_score) %>%
+  column_to_rownames("gene_site")
+
+# 3. Logical Ordering of Columns
+hm_data <- hm_data %>%
+  #order columns by Channel (H before L), then Group (Control before Co-culture), then Patient
+  select(
+    matches("Control_P605_H"),
+    matches("Control_P905_H"),
+    matches("Control_P915_H"),
+    matches("Control_P924_H"),
+    matches("Co-culture_P605_H"),
+    matches("Co-culture_P905_H"),
+    matches("Co-culture_P915_H"),
+    matches("Co-culture_P924_H"),
+    matches("Control_P605_L"),
+    matches("Control_P905_L"),
+    matches("Control_P915_L"),
+    matches("Control_P924_L"),
+    matches("Co-culture_P605_L"),
+    matches("Co-culture_P905_L"),
+    matches("Co-culture_P915_L"),
+    matches("Co-culture_P924_L")
+  )
+  
+
+# 4. Create Annotations
+anno_col <- data.frame(
+  row.names = colnames(hm_data),
+  Group = if_else(str_detect(colnames(hm_data), "Co-culture"), "Co-culture", "Control"),
+  Channel = if_else(str_detect(colnames(hm_data), "_H$"), "Heavy", "Light"),
+  Patient = str_extract(colnames(hm_data), "(?<=_)[^_]+(?=_)") # Extracts the middle patient ID
+)
+
+# 5. Heatmap Visualization
+# Centering the scale at 0 with symmetric breaks
+limit <- max(abs(range(hm_data, na.rm = TRUE)))
+breaks <- seq(-1.5, 1.5, length.out = 101)
+
+pheatmap(
+  as.matrix(hm_data),
+  color = colorRampPalette(rev(brewer.pal(n = 11, name = "RdBu")))(100),
+  breaks = breaks,
+  cluster_cols = FALSE,
+  cluster_rows = TRUE,
+  show_rownames = TRUE,
+  fontsize_row = 7,
+  angle_col = 90,
+  annotation_col = anno_col,
+  main = "PRKDC Phosphosites (Significantly Regulated)"
+)
+```
+
+## 16. Differential regulation analysis (H vs L)
 ```{r differential-regulation-HL}
 #| message: false
 #| warning: false
@@ -657,7 +793,7 @@ write.table(regulated_annotated, here("Results/SILAC_Phos/Regulated_Known_Sites.
             sep = "\t", row.names = FALSE, quote = FALSE)
 ```
 
-## 15. Plot specific phosphosites
+## 17. Plot specific phosphosites
 ```{r specific-phosphosites}
 #| message: false
 #| warning: false
@@ -711,7 +847,7 @@ ggplot(df_plot, aes(
   facet_grid(gene_site ~ Channel, scales = "free_y")
 ```
 
-## 16. Differential expression analysis with Limma by patient
+## 18. Differential expression analysis with Limma by patient
 ```{r limma-by-patient}
 #| message: false
 #| warning: false
@@ -808,7 +944,7 @@ ggplot(plot_data, aes(x = Channel, y = n, fill = Regulation)) +
   facet_wrap(~TCL)
 ```
 
-## 17. Prepare input for RoKAI and PTMNavigator
+## 19. Prepare input for RoKAI and PTMNavigator
 ```{r prepare-input}
 #| message: false
 #| warning: false
