@@ -25,9 +25,9 @@ This project contains the source code and analysis pipeline for the study *"The 
 
 ---
 
-### 📄 Read the Pre-print
-**[The Proteomics and Phosphoproteomics Landscape of Melanoma Under T Cell Attack](https://doi.org/10.1101/2025.09.12.675787)**  
-*Available now on bioRxiv* 🔬
+### 📄 Read the Published Paper
+**[The Proteomics and Phosphoproteomics Landscape of Melanoma Under T Cell Attack](https://doi.org/10.1016/j.xcrm.2026.102829)**  
+*Published in Cell Reports Medicine* 🔬
 
 ---
 
